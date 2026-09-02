@@ -1,0 +1,50 @@
+# Terraform state - contains resource attributes in plaintext (SR-09, T-22)
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform.tfstate.lock.info
+backend.hcl
+
+# Provider binaries and module cache
+.terraform/
+
+# Variable files - account IDs, addresses, environment values (F16)
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Crash logs
+crash.log
+crash.*.log
+
+# Plan output - may embed sensitive values
+*.tfplan
+*.tfplan.*
+tfplan
+tfplan.*
+
+# Keys and certificates
+*.pem
+*.key
+*.crt
+*.p12
+
+# Credentials
+.env
+.env.*
+credentials
+*_rsa
+*_rsa.pub
+
+# Tool output
+prowler-output/
+gotestwaf-report/
+*.ovpn
+
+# Editor and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
