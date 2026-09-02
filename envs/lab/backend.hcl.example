@@ -1,0 +1,7 @@
+# backend.hcl.example
+# 이 파일을 backend.hcl 로 복사한 뒤 실제 값으로 채우세요.
+bucket       = "soc-lab-tfstate-000000000000"
+key          = "envs/lab/terraform.tfstate"
+region       = "ap-northeast-2"
+encrypt      = true
+use_lockfile = true
