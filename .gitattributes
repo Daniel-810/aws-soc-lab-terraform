@@ -1,0 +1,10 @@
+# Normalise line endings so editors and scripts on different platforms do not
+# rewrite whole files. Without this a single-line edit made on Windows can show
+# up as a full-file diff, which buries the actual change during review.
+* text=auto eol=lf
+
+# Binary files must never be touched.
+*.png binary
+*.jpg binary
+*.pdf binary
+*.gif binary
