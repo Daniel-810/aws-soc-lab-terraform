@@ -8,6 +8,10 @@ backend.hcl
 # Provider binaries and module cache
 .terraform/
 
+# Lock files belong to root modules. Child modules never consume their own,
+# so one appearing there is a leftover from validating the module standalone.
+modules/*/.terraform.lock.hcl
+
 # Variable files - account IDs, addresses, environment values (F16)
 *.tfvars
 *.tfvars.json
