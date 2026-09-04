@@ -1,0 +1,9 @@
+#!/bin/bash
+# Stop on first error: otherwise the instance comes up healthy with no app.
+set -euo pipefail
+
+dnf install -y docker
+systemctl enable --now docker
+
+# Plaintext on 3000. TLS terminates at the WAF tier from Phase 7 (ADR-011)
+docker run -d --restart=always -p 3000:3000 ${app_image}

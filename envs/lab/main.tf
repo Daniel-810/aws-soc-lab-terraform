@@ -22,3 +22,13 @@ module "network" {
   vpc_cidr = "10.20.0.0/16"
   az_count = 1
 }
+
+module "web" {
+  source = "../../modules/web"
+
+  project           = "soc-lab"
+  subnet_id         = module.network.subnet_ids["app-ap-northeast-2a"]
+  security_group_id = module.network.security_group_ids["app"]
+  instance_type     = "t3.micro"
+  app_image         = "bkimminich/juice-shop:v18.0.0"
+}
