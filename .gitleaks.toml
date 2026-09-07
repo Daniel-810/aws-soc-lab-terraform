@@ -1,0 +1,42 @@
+# gitleaks configuration
+#
+# Extends the bundled rule set rather than replacing it, so the upstream
+# detectors for access keys, private keys and provider tokens stay active.
+# The rules below cover what those detectors do not: identifiers that are not
+# credentials but still must not appear in a public repository (SR-10, F16).
+
+[extend]
+useDefault = true
+
+# An AWS account ID is not a secret on its own, but publishing it narrows an
+# attacker's work: it turns role ARNs into guessable strings and makes the
+# account a concrete target for enumeration and confused-deputy attempts.
+# The requirement is that no account identifier reaches the repository, so the
+# rule matches the shape it always appears in rather than one literal value.
+# Writing the real identifier into this file to exclude it would defeat it.
+[[rules]]
+id = "aws-account-id-in-arn"
+description = "AWS account ID embedded in an ARN"
+regex = '''arn:aws[a-z-]*:[a-z0-9-]+:[a-z0-9-]*:[0-9]{12}:'''
+tags = ["aws", "account-id", "SR-10"]
+
+# The state bucket is named after the account (bootstrap/main.tf builds it from
+# a data source at apply time). A literal bucket name in the code would carry
+# the identifier with it, which is why backend.hcl is injected at init and kept
+# out of version control.
+[[rules]]
+id = "state-bucket-with-account-id"
+description = "State bucket name carrying an account ID"
+regex = '''soc-lab-tfstate-[0-9]{12}'''
+tags = ["aws", "account-id", "SR-10"]
+
+[rules.allowlist]
+# The example file ships an all-zero placeholder so the format is documented
+# without exposing a real account.
+regexes = ['''soc-lab-tfstate-0{12}''']
+
+[allowlist]
+description = "Paths that legitimately contain placeholder values"
+paths = [
+  '''envs/lab/backend\.hcl\.example''',
+]
