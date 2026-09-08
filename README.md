@@ -86,7 +86,7 @@ flowchart LR
 | [`01-requirements.md`](docs/01-requirements.md) | 기능 10 · 비기능 9 · 보안 27 · 인수기준 11, 추적성 매트릭스, 원본 결함 16건 |
 | [`02-threat-model.md`](docs/02-threat-model.md) | 신뢰 경계 5개, 위협 43건, 데이터 흐름도, 수용한 위험 |
 | [`03-architecture.md`](docs/03-architecture.md) | 상위·상세 설계, 주소 체계, 라우팅, 보안그룹, 로그 파이프라인, 프로덕션 구성과의 차이 |
-| [`adr/`](docs/adr/) | 설계 결정 14건. 맥락 · 결정 · 근거 · 고려한 대안 · 결과 |
+| [`adr/`](docs/adr/) | 설계 결정 18건. 맥락 · 결정 · 근거 · 고려한 대안 · 결과 |
 
 각 ADR에는 채택하지 않은 선택지와 그 근거를 함께 기록했다.
 대안을 검토하지 않은 결정과 검토 후 배제한 결정은 동일하지 않다.
@@ -101,6 +101,9 @@ flowchart LR
 - [`ADR-012`](docs/adr/012-inline-ips-fail-close.md) — 검사 프로세스 중단 시 패킷을 차단한다.
   관리형 방식에서는 이 결정 자체가 불가능하며, 이는 공유 책임 모델의 구체적 사례에 해당한다.
 - [`ADR-013`](docs/adr/013-default-nacl-sg-only.md) — 네트워크 ACL을 사용하지 않는 근거.
+- [`ADR-017`](docs/adr/017-ca-key-outside-terraform.md) — 인증 기관의 개인 키를 Terraform이 다루지 않는다.
+  상태 파일에는 모든 속성이 평문으로 기록되므로, 시크릿 관리 서비스를 도입하는 것만으로는 해결되지 않는다.
+  키 생성을 인스턴스로 옮기고 공개 인증서만 공유한다.
 
 ---
 
@@ -111,6 +114,7 @@ bootstrap/          상태 저장 버킷. 로컬 상태로 최초 1회 실행
 envs/lab/           배포 진입점. 원격 상태 사용
 modules/
   network/          VPC · 서브넷 · 라우팅 · 게이트웨이 · 보안그룹
+  web/              애플리케이션 인스턴스 · 인스턴스 역할 · 로그 그룹
 docs/
   adr/              설계 결정 기록
 ```
