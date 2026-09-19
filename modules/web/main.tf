@@ -92,6 +92,8 @@ data "aws_ami" "app" {
   }
 }
 
+data "aws_region" "current" {}
+
 resource "aws_instance" "app" {
   ami           = data.aws_ami.app.id
   instance_type = var.instance_type
@@ -100,7 +102,11 @@ resource "aws_instance" "app" {
   vpc_security_group_ids = [var.security_group_id]
   iam_instance_profile   = aws_iam_instance_profile.app.name
 
-  user_data                   = templatefile("${path.module}/user_data.sh.tftpl", { app_image = var.app_image })
+  user_data = templatefile("${path.module}/user_data.sh.tftpl", {
+    app_image     = var.app_image
+    ca_secret_arn = var.ca_secret_arn
+    region        = data.aws_region.current.region
+  })
   user_data_replace_on_change = true
 
   metadata_options {

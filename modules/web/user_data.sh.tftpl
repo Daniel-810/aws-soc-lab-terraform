@@ -2,8 +2,59 @@
 # Stop on first error: otherwise the instance comes up healthy with no app.
 set -euo pipefail
 
-dnf install -y docker
+dnf install -y docker nginx openssl
 systemctl enable --now docker
 
-# Plaintext on 3000. TLS terminates at the WAF tier from Phase 7 (ADR-011)
-docker run -d --restart=always -p 3000:3000 ${app_image}
+# Plaintext on 3000, reachable from this host only. nginx in front
+# terminates TLS for the WAF leg (SR-08).
+docker run -d --restart=always -p 127.0.0.1:3000:3000 ${app_image}
+
+TLS_DIR=/etc/nginx/tls
+mkdir -p "$TLS_DIR"
+cd "$TLS_DIR"
+umask 077
+
+# Internal CA. Its key signs one certificate and is then destroyed,
+# so no copy exists anywhere after boot (ADR-017).
+openssl req -x509 -newkey rsa:2048 -nodes -days 7 \
+  -keyout ca.key -out ca.crt -subj "/CN=soc-lab-internal-ca"
+
+openssl req -newkey rsa:2048 -nodes \
+  -keyout server.key -out server.csr -subj "/CN=app.internal"
+
+printf "subjectAltName=DNS:app.internal\n" > san.ext
+openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -days 7 -extfile san.ext -out server.crt
+
+shred -u ca.key
+rm -f server.csr san.ext ca.srl
+
+cat > /etc/nginx/conf.d/app.conf <<'EOF'
+server {
+    listen      443 ssl;
+    server_name app.internal;
+
+    ssl_certificate     /etc/nginx/tls/server.crt;
+    ssl_certificate_key /etc/nginx/tls/server.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
+EOF
+
+nginx -t
+systemctl enable --now nginx
+
+# The WAF waits for this secret, so publish only once the app answers
+# behind TLS: the value doubles as a readiness signal.
+timeout 180 bash -c 'until curl -sfk https://127.0.0.1 -o /dev/null; do sleep 3; done'
+
+aws secretsmanager put-secret-value \
+  --region "${region}" \
+  --secret-id "${ca_secret_arn}" \
+  --secret-string file://ca.crt
