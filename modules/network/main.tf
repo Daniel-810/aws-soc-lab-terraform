@@ -175,10 +175,12 @@ resource "aws_security_group" "suricata" {
 # ---------------------------------------------------------------------------
 
 resource "aws_vpc_security_group_ingress_rule" "waf_in_https" {
-  security_group_id = aws_security_group.waf.id
-  description       = "Public HTTPS to the boundary layer (FR-01)"
+  for_each = toset(var.waf_ingress_cidrs)
 
-  cidr_ipv4   = "0.0.0.0/0"
+  security_group_id = aws_security_group.waf.id
+  description       = "HTTPS to the boundary layer from allowed sources (FR-01, ADR-019)"
+
+  cidr_ipv4   = each.value
   ip_protocol = "tcp"
   from_port   = 443
   to_port     = 443
@@ -192,10 +194,12 @@ resource "aws_vpc_security_group_ingress_rule" "waf_in_https" {
 # coverage can be demonstrated. Registered as an accepted risk in the threat
 # model (section 12). Not to be carried into a production environment.
 resource "aws_vpc_security_group_ingress_rule" "waf_in_http" {
-  security_group_id = aws_security_group.waf.id
-  description       = "Public HTTP kept open on purpose to compare detection layers (T-11)"
+  for_each = toset(var.waf_ingress_cidrs)
 
-  cidr_ipv4   = "0.0.0.0/0"
+  security_group_id = aws_security_group.waf.id
+  description       = "HTTP kept open on purpose to compare detection layers (T-11, ADR-019)"
+
+  cidr_ipv4   = each.value
   ip_protocol = "tcp"
   from_port   = 80
   to_port     = 80

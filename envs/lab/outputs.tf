@@ -10,3 +10,13 @@ output "instance_id" {
   description = "ID of the application instance. Used to open a session and to verify the deployment."
   value       = module.web.instance_id
 }
+
+output "waf_instance_id" {
+  description = "ID of the WAF instance"
+  value       = module.waf.instance_id
+}
+
+output "waf_public_ip" {
+  description = "Public address the WAF answers on"
+  value       = module.waf.public_ip
+}
