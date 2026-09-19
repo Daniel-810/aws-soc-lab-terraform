@@ -18,6 +18,13 @@ variable "security_group_id" {
   type        = string
 }
 
+# The instance writes its CA certificate here at boot so the WAF can verify
+# the internal TLS leg. The role gets write access to this secret only (SR-06).
+variable "ca_secret_arn" {
+  description = "ARN of the secret the instance writes its internal CA certificate to"
+  type        = string
+}
+
 variable "instance_type" {
   description = "EC2 instance type for the application host"
   type        = string

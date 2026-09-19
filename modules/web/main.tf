@@ -57,6 +57,14 @@ data "aws_iam_policy_document" "app" {
     ]
     resources = ["*"]
   }
+
+  # Write only. Reading belongs to the WAF role, so the trust anchor can be
+  # replaced by this instance alone (ADR-017).
+  statement {
+    effect    = "Allow"
+    actions   = ["secretsmanager:PutSecretValue"]
+    resources = [var.ca_secret_arn]
+  }
 }
 
 resource "aws_iam_role_policy" "app" {

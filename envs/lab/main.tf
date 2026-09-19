@@ -23,6 +23,12 @@ module "network" {
   az_count = 1
 }
 
+module "secrets" {
+  source = "../../modules/secrets"
+
+  project = "soc-lab"
+}
+
 module "web" {
   source = "../../modules/web"
 
@@ -31,4 +37,5 @@ module "web" {
   security_group_id = module.network.security_group_ids["app"]
   instance_type     = "t3.micro"
   app_image         = "bkimminich/juice-shop:v18.0.0"
+  ca_secret_arn     = module.secrets.ca_cert_secret_arn
 }
