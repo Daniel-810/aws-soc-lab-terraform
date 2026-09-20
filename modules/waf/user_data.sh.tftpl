@@ -14,7 +14,17 @@ apt-get update --error-on=any
 
 # First boot may run unattended-upgrades in the background; wait for its
 # lock instead of failing.
-apt-get -o DPkg::Lock::Timeout=300 install -y nginx python3-boto3 libnginx-mod-http-modsecurity
+apt-get -o DPkg::Lock::Timeout=300 install -y \
+  nginx python3-boto3 libnginx-mod-http-modsecurity modsecurity-crs
+
+# Versions are recorded rather than pinned: the archive drops superseded
+# versions once a security update lands, so a pinned install eventually
+# fails outright and would also block those updates (SR-22, ADR-021). Each
+# measurement reads this file, so a result carries the versions it came
+# from (NFR-03).
+dpkg-query -W -f='$${Package} $${Version}\n' \
+  nginx libnginx-mod-http-modsecurity libmodsecurity3t64 modsecurity-crs \
+  > /etc/nginx/modsec-versions.txt
 
 # The distro's default site would answer on 80 ahead of ours.
 rm -f /etc/nginx/sites-enabled/default
@@ -63,13 +73,32 @@ fetch-ca "${region}" "${ca_secret_arn}" "$TLS_DIR/app-ca.crt" 600
 # Refuse anything that is not a certificate before trusting it.
 openssl x509 -in "$TLS_DIR/app-ca.crt" -noout
 
-# Engine only, no ruleset: reproduces the original as-built state (F1) as
-# the baseline for ADR-018. Later directives override the packaged defaults,
-# and the packaged include file is not used so no ruleset loads implicitly.
+# The packaged include file is not used, so what loads is listed here.
+# Order matters: the engine defaults come first, then the ruleset, then our
+# overrides, because the last directive wins.
 mkdir -p /etc/nginx/modsec
 cat > /etc/nginx/modsec/main.conf <<'EOF'
 Include /etc/nginx/modsecurity.conf
 
+# The package ships owasp-crs.load for the Apache module, and it uses an
+# IncludeOptional directive this engine rejects. The same files are listed
+# here in the order that loader uses. All four paths come with the package.
+Include /etc/modsecurity/crs/crs-setup.conf
+Include /etc/modsecurity/crs/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf
+
+# Paranoia level 2 rather than the default 1. Measured on both: attack
+# detection rises from 35.0% to 44.7% over the same requests, while false
+# positives on real application traffic stay at zero. The cost falls on
+# deliberately confusing text, where they go from 14.9% to 22.3%. Several
+# categories, NoSQL injection among them, are not covered at all at level 1
+# (ADR-018, AC-05a, AC-05b).
+SecAction "id:900000,phase:1,nolog,pass,t:none,setvar:tx.paranoia_level=2"
+
+Include /usr/share/modsecurity-crs/rules/*.conf
+Include /etc/modsecurity/crs/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf
+
+# Blocking, the final state for this phase. Detection only was the stage
+# before it, used to measure the ruleset before letting it act (ADR-018).
 SecRuleEngine On
 
 # Only transactions a rule flagged are recorded (SR-16, T-13), so a probe
