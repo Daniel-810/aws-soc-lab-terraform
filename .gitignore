@@ -52,3 +52,9 @@ gotestwaf-report/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Measurement tool: local environment and results. Results carry the WAF's
+# public address and request bodies, so they stay out of the repository (SR-10).
+tools/probe/.venv/
+tools/probe/results/
+__pycache__/

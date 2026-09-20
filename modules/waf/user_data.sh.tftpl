@@ -14,7 +14,7 @@ apt-get update --error-on=any
 
 # First boot may run unattended-upgrades in the background; wait for its
 # lock instead of failing.
-apt-get -o DPkg::Lock::Timeout=300 install -y nginx python3-boto3
+apt-get -o DPkg::Lock::Timeout=300 install -y nginx python3-boto3 libnginx-mod-http-modsecurity
 
 # The distro's default site would answer on 80 ahead of ours.
 rm -f /etc/nginx/sites-enabled/default
@@ -63,6 +63,28 @@ fetch-ca "${region}" "${ca_secret_arn}" "$TLS_DIR/app-ca.crt" 600
 # Refuse anything that is not a certificate before trusting it.
 openssl x509 -in "$TLS_DIR/app-ca.crt" -noout
 
+# Engine only, no ruleset: reproduces the original as-built state (F1) as
+# the baseline for ADR-018. Later directives override the packaged defaults,
+# and the packaged include file is not used so no ruleset loads implicitly.
+mkdir -p /etc/nginx/modsec
+cat > /etc/nginx/modsec/main.conf <<'EOF'
+Include /etc/nginx/modsecurity.conf
+
+SecRuleEngine On
+
+# Only transactions a rule flagged are recorded (SR-16, T-13), so a probe
+# missing from this log was not detected. Parts: A audit header, B request
+# headers (carries X-Probe-Id), C request body (needed to judge true or
+# false positives), H rule messages, Z end marker. Response bodies are left
+# out for size and because they carry user data. Masking is Phase 10.
+SecAuditEngine RelevantOnly
+SecAuditLogFormat JSON
+SecAuditLogParts ABCHZ
+SecAuditLogType Serial
+SecAuditLog /var/log/nginx/modsec_audit.log
+EOF
+install -o www-data -g adm -m 640 /dev/null /var/log/nginx/modsec_audit.log
+
 cat > /etc/nginx/conf.d/waf.conf <<'EOF'
 # Forward WebSocket upgrades; without this the app falls back to polling.
 map $http_upgrade $connection_upgrade {
@@ -76,6 +98,9 @@ server {
     listen 80  default_server;
     listen 443 ssl default_server;
     server_name _;
+
+    modsecurity            on;
+    modsecurity_rules_file /etc/nginx/modsec/main.conf;
 
     ssl_certificate     /etc/nginx/tls/waf.crt;
     ssl_certificate_key /etc/nginx/tls/waf.key;
