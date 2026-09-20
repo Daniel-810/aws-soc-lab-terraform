@@ -1,0 +1,13 @@
+payload:
+  - '(&(uid=admin)(!(&(1=0)(userPassword=q))))'
+  - '*(|(objectclass=*))'
+  - 'userPassword:2.5.13.18:=123'
+encoder:
+  - Base64Flat
+  - URL
+placeholder:
+  - URLParam
+  - HTMLForm
+  - HTMLMultipartForm
+  - JSONRequest
+type: LDAP Injection

@@ -1,0 +1,167 @@
+#!/bin/bash
+# Stop on first error: otherwise the instance comes up healthy with no proxy.
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+# The security group allows 443 out only. The archive serves the same
+# signed packages over HTTPS, so switch rather than open port 80.
+sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources
+
+# The image's package lists date from its build; stale entries 404 once a
+# newer version replaces them in the archive. --error-on=any because plain
+# update exits 0 even when every mirror is unreachable.
+apt-get update --error-on=any
+
+# First boot may run unattended-upgrades in the background; wait for its
+# lock instead of failing.
+apt-get -o DPkg::Lock::Timeout=300 install -y \
+  nginx python3-boto3 libnginx-mod-http-modsecurity modsecurity-crs
+
+# Versions are recorded rather than pinned: the archive drops superseded
+# versions once a security update lands, so a pinned install eventually
+# fails outright and would also block those updates (SR-22, ADR-021). Each
+# measurement reads this file, so a result carries the versions it came
+# from (NFR-03).
+dpkg-query -W -f='$${Package} $${Version}\n' \
+  nginx libnginx-mod-http-modsecurity libmodsecurity3t64 modsecurity-crs \
+  > /etc/nginx/modsec-versions.txt
+
+# The distro's default site would answer on 80 ahead of ours.
+rm -f /etc/nginx/sites-enabled/default
+
+TLS_DIR=/etc/nginx/tls
+mkdir -p "$TLS_DIR"
+cd "$TLS_DIR"
+umask 077
+
+# Self-signed for the internet leg: the lab has no domain to validate a
+# public certificate against. SR-08 covers the internal leg, not this one.
+openssl req -x509 -newkey rsa:2048 -nodes -days 7 \
+  -keyout waf.key -out waf.crt -subj "/CN=soc-lab-waf"
+
+cat > /usr/local/bin/fetch-ca <<'EOF'
+#!/usr/bin/env python3
+"""Wait for the app to publish its CA certificate, then write it out."""
+import sys, time
+import boto3
+from botocore.exceptions import ClientError
+
+region, secret_id, dest, timeout = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+client = boto3.client("secretsmanager", region_name=region)
+deadline = time.monotonic() + timeout
+
+while True:
+    try:
+        value = client.get_secret_value(SecretId=secret_id)["SecretString"]
+        break
+    except ClientError as e:
+        # No value yet means the app is still booting. Anything else
+        # (AccessDenied in particular) is a real fault: fail at once.
+        if e.response["Error"]["Code"] != "ResourceNotFoundException":
+            raise
+        if time.monotonic() > deadline:
+            sys.exit(f"CA certificate not published within {timeout}s")
+        time.sleep(5)
+
+with open(dest, "w") as f:
+    f.write(value)
+EOF
+chmod 755 /usr/local/bin/fetch-ca
+
+fetch-ca "${region}" "${ca_secret_arn}" "$TLS_DIR/app-ca.crt" 600
+
+# Refuse anything that is not a certificate before trusting it.
+openssl x509 -in "$TLS_DIR/app-ca.crt" -noout
+
+# The packaged include file is not used, so what loads is listed here.
+# Order matters: the engine defaults come first, then the ruleset, then our
+# overrides, because the last directive wins.
+mkdir -p /etc/nginx/modsec
+cat > /etc/nginx/modsec/main.conf <<'EOF'
+Include /etc/nginx/modsecurity.conf
+
+# The package ships owasp-crs.load for the Apache module, and it uses an
+# IncludeOptional directive this engine rejects. The same files are listed
+# here in the order that loader uses. All four paths come with the package.
+Include /etc/modsecurity/crs/crs-setup.conf
+Include /etc/modsecurity/crs/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf
+
+# Paranoia level 2 rather than the default 1. Measured on both: attack
+# detection rises from 35.0% to 44.7% over the same requests, while false
+# positives on real application traffic stay at zero. The cost falls on
+# deliberately confusing text, where they go from 14.9% to 22.3%. Several
+# categories, NoSQL injection among them, are not covered at all at level 1
+# (ADR-018, AC-05a, AC-05b).
+SecAction "id:900000,phase:1,nolog,pass,t:none,setvar:tx.paranoia_level=2"
+
+Include /usr/share/modsecurity-crs/rules/*.conf
+Include /etc/modsecurity/crs/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf
+
+# Blocking, the final state for this phase. Detection only was the stage
+# before it, used to measure the ruleset before letting it act (ADR-018).
+SecRuleEngine On
+
+# Only transactions a rule flagged are recorded (SR-16, T-13), so a probe
+# missing from this log was not detected. Parts: A audit header, B request
+# headers (carries X-Probe-Id), C request body (needed to judge true or
+# false positives), H rule messages, Z end marker. Response bodies are left
+# out for size and because they carry user data. Masking is Phase 10.
+SecAuditEngine RelevantOnly
+SecAuditLogFormat JSON
+SecAuditLogParts ABCHZ
+SecAuditLogType Serial
+SecAuditLog /var/log/nginx/modsec_audit.log
+EOF
+install -o www-data -g adm -m 640 /dev/null /var/log/nginx/modsec_audit.log
+
+cat > /etc/nginx/conf.d/waf.conf <<'EOF'
+# Forward WebSocket upgrades; without this the app falls back to polling.
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    # Plaintext 80 is kept on purpose so the network firewall can see
+    # payloads it cannot read inside TLS (T-11, accepted).
+    listen 80  default_server;
+    listen 443 ssl default_server;
+    server_name _;
+
+    modsecurity            on;
+    modsecurity_rules_file /etc/nginx/modsec/main.conf;
+
+    ssl_certificate     /etc/nginx/tls/waf.crt;
+    ssl_certificate_key /etc/nginx/tls/waf.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    location / {
+        proxy_pass https://${app_private_ip};
+
+        # Off by default in nginx. Leaving it off is defect F3 (SR-08).
+        proxy_ssl_verify              on;
+        proxy_ssl_trusted_certificate /etc/nginx/tls/app-ca.crt;
+        proxy_ssl_name                app.internal;
+        proxy_ssl_server_name         on;
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        $connection_upgrade;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+EOF
+
+nginx -t
+systemctl restart nginx
+
+# The Ubuntu image ships sshd listening on 22. The security group already
+# blocks it (SR-01); access goes through Session Manager, so stop the
+# service as well rather than rely on one layer.
+systemctl disable --now ssh.socket ssh.service
+
+# End to end through the verified internal leg. A failure here means the
+# WAF cannot reach or cannot trust the app.
+curl -sfk -o /dev/null https://127.0.0.1

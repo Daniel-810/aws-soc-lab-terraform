@@ -24,3 +24,16 @@ variable "az_count" {
     error_message = "az_count must be between 1 and 3."
   }
 }
+
+# The target behind the WAF is deliberately vulnerable, so the boundary is
+# opened to named sources only rather than the whole internet (ADR-019).
+# No default: the caller has to decide who may reach it.
+variable "waf_ingress_cidrs" {
+  description = "IPv4 CIDRs allowed to reach the WAF on 80 and 443"
+  type        = list(string)
+
+  validation {
+    condition     = length(var.waf_ingress_cidrs) > 0 && alltrue([for c in var.waf_ingress_cidrs : can(cidrhost(c, 0))])
+    error_message = "waf_ingress_cidrs must hold at least one valid IPv4 CIDR."
+  }
+}
