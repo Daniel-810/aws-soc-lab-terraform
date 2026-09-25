@@ -1,0 +1,7 @@
+# backend.hcl.example
+# 이 파일을 backend.hcl 로 복사한 뒤 실제 값으로 채우세요.
+# key 는 main.tf 의 backend 블록에 고정돼 있으므로 여기에 두지 않습니다.
+bucket       = "soc-lab-tfstate-000000000000"
+region       = "ap-northeast-2"
+encrypt      = true
+use_lockfile = true
