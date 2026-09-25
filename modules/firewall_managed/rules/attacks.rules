@@ -111,15 +111,24 @@ drop http any any -> $HOME_NET any (msg:"SOC-LAB NoSQL operator in query"; \
 # --- Outbound ------------------------------------------------------------
 
 # FR-10 covers what leaves the environment after a compromise. Detection
-# there cannot rely on payload shape, so a known test destination stands in
-# for command and control traffic: the request is generated on purpose from
-# the application host, and nothing else in this environment reaches it.
+# there cannot rely on payload shape, so a marker host name stands in for
+# command and control traffic. It sits under .invalid, which RFC 6761
+# reserves as never resolvable and never registrable: an earlier public test
+# host (testmynids.org) stopped resolving, and a name nobody can own cannot
+# lapse or be taken over.
+#
+# The rule reads only the Host header, so the check sends the marker to any
+# reachable plaintext site from the application host:
+#   curl -H "Host: c2.soc-lab.invalid" http://example.com/
+# A timeout plus an alert for this sid is a pass; the same request without
+# the header is the control and should return 200.
+#
 # http.host is normalized to lowercase, so the content is written in lowercase
 # and nocase is left out: the engine rejects the pair as redundant.
-drop http $HOME_NET any -> any any (msg:"SOC-LAB outbound to IDS test host"; \
-    flow:established,to_server; http.host; content:"testmynids.org"; \
+drop http $HOME_NET any -> any any (msg:"SOC-LAB outbound to C2 marker host"; \
+    flow:established,to_server; http.host; content:"c2.soc-lab.invalid"; \
     classtype:trojan-activity; metadata:probe_category outbound; \
-    sid:1009001; rev:2;)
+    sid:1009001; rev:3;)
 
 # The classic response-side signature: a command output that should never
 # appear in a page this environment serves.
