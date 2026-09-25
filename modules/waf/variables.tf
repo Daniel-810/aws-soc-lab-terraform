@@ -65,3 +65,17 @@ variable "ami_name_pattern" {
   type        = string
   default     = "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-20260904"
 }
+
+# The shared installer in scripts/, passed in by the root as the rule file
+# is, so both boot scripts run the same verified install (ADR-028).
+variable "cwagent_install" {
+  description = "Shell fragment that installs the CloudWatch agent after verifying its signature"
+  type        = string
+}
+
+# Shared by every instance, passed in by the root as the agent installer is:
+# keeps chrony on the link-local Amazon Time Sync Service only (ADR-031).
+variable "time_sync" {
+  description = "Shell fragment that points chrony at the Amazon Time Sync Service only"
+  type        = string
+}

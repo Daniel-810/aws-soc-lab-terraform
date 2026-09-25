@@ -2,6 +2,9 @@
 # Stop on first error: otherwise the instance comes up healthy with no app.
 set -euo pipefail
 
+# --- time source (SR-19, ADR-031) -------------------------------------------
+${time_sync}
+
 # Retried because this instance can boot before the NAT gateway and its
 # route are ready; a single attempt would fail the boot for good. Other
 # faults still surface once the deadline passes.

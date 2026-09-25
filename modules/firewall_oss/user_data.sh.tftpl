@@ -4,6 +4,9 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
+# --- time source (SR-19, ADR-031) -------------------------------------------
+${time_sync}
+
 # The security group allows the archive only over HTTPS, as on the WAF.
 sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources
 
@@ -130,6 +133,40 @@ table inet ips {
 EOF
 systemctl enable nftables.service
 systemctl restart nftables.service
+
+# --- log shipping (Phase 10) ------------------------------------------------
+
+REGION="${region}"
+VERSIONS_FILE=/etc/suricata/soc-lab-versions.txt
+${cwagent_install}
+
+# Alerts only (SR-16). eve.json also carries flow, DNS and statistics
+# events: the flows duplicate the VPC flow log and the rest is volume, not
+# findings. The stream name is fixed rather than the instance id (SR-14).
+cat > /opt/aws/amazon-cloudwatch-agent/etc/soc-lab.json <<'EOF'
+{
+  "agent": { "run_as_user": "root" },
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "/var/log/suricata/eve.json",
+            "log_group_name": "${log_group}",
+            "log_stream_name": "eve-alert",
+            "timezone": "UTC",
+            "filters": [
+              { "type": "include", "expression": "\"event_type\":\"alert\"" }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
+EOF
+/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+  -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/soc-lab.json
 
 # The Ubuntu image ships sshd listening on 22. The security group already
 # blocks it; stopping it removes the listener as well (Session Manager only).

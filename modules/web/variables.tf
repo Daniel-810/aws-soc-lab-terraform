@@ -65,3 +65,10 @@ variable "ami_name_pattern" {
   type        = string
   default     = "al2023-ami-2023.12.20260831.0-kernel-6.1-x86_64"
 }
+
+# Shared by every instance, passed in by the root as the agent installer is:
+# keeps chrony on the link-local Amazon Time Sync Service only (ADR-031).
+variable "time_sync" {
+  description = "Shell fragment that points chrony at the Amazon Time Sync Service only"
+  type        = string
+}

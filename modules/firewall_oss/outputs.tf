@@ -14,6 +14,6 @@ output "public_ip" {
 }
 
 output "log_group" {
-  description = "Log group reserved for the engine's events. Shipping to it starts in Phase 10."
+  description = "Log group the agent ships the engine's alerts to"
   value       = aws_cloudwatch_log_group.this.name
 }

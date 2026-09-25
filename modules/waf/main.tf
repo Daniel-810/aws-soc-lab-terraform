@@ -101,11 +101,17 @@ resource "aws_instance" "waf" {
   vpc_security_group_ids = [var.security_group_id]
   iam_instance_profile   = aws_iam_instance_profile.waf.name
 
-  user_data = templatefile("${path.module}/user_data.sh.tftpl", {
-    app_private_ip = var.app_private_ip
-    ca_secret_arn  = var.ca_secret_arn
-    region         = data.aws_region.current.region
-  })
+  # Compressed for the same reason as the Suricata instance: with the agent
+  # installer and time source added it came within 2.3 KiB of the 16 KiB
+  # limit. cloud-init detects gzip and unpacks it.
+  user_data_base64 = base64gzip(templatefile("${path.module}/user_data.sh.tftpl", {
+    app_private_ip  = var.app_private_ip
+    ca_secret_arn   = var.ca_secret_arn
+    region          = data.aws_region.current.region
+    log_group       = aws_cloudwatch_log_group.this.name
+    cwagent_install = var.cwagent_install
+    time_sync       = var.time_sync
+  }))
   user_data_replace_on_change = true
 
   metadata_options {
