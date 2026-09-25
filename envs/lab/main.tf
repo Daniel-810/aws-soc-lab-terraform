@@ -69,3 +69,12 @@ module "waf" {
   app_private_ip    = module.web.private_ip
   ca_secret_arn     = module.secrets.ca_cert_secret_arn
 }
+
+module "firewall" {
+  source = "../../modules/firewall_managed"
+
+  project    = "soc-lab"
+  vpc_id     = module.network.vpc_id
+  subnet_ids = [module.network.subnet_ids["inspect_mgd-ap-northeast-2a"]]
+  home_net   = "10.20.0.0/16"
+}

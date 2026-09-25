@@ -1,0 +1,129 @@
+# SOC Lab network inspection rules
+#
+# The same file is loaded by both inspection approaches: the managed firewall
+# reads it as a rule group, and the self-managed Suricata instance reads it
+# from disk (ADR-022). Keeping one source is what makes the two approaches
+# comparable, so anything added here has to work on both.
+#
+# Only the plaintext path is inspected. Requests over TLS pass through as
+# ciphertext because inspection sits before termination (ADR-008), which is
+# the difference this lab measures against the web application firewall.
+#
+# sid ranges, so a category can be read from the number alone:
+#   1001000  SQL injection        1005000  CRLF injection
+#   1002000  cross-site scripting 1006000  XML external entity
+#   1003000  path traversal       1007000  NoSQL injection
+#   1004000  command injection    1008000  reserved
+#   1009000  outbound (FR-10)
+# Numbers below 1000000 belong to public rulesets and are left free.
+#
+# drop rather than alert: SR-13 requires blocking, and AC-06 is verified by a
+# failed request together with a matching log entry. Traffic no rule matches
+# passes, so management access over the inspection path is not cut off.
+
+# --- SQL injection -------------------------------------------------------
+
+drop http any any -> $HOME_NET any (msg:"SOC-LAB SQLi union select"; \
+    flow:established,to_server; http.uri; content:"union"; nocase; \
+    content:"select"; nocase; distance:0; within:40; \
+    classtype:web-application-attack; metadata:probe_category sqli; \
+    sid:1001001; rev:1;)
+
+drop http any any -> $HOME_NET any (msg:"SOC-LAB SQLi tautology or 1=1"; \
+    flow:established,to_server; http.uri; content:"or 1=1"; nocase; \
+    classtype:web-application-attack; metadata:probe_category sqli; \
+    sid:1001002; rev:1;)
+
+drop http any any -> $HOME_NET any (msg:"SOC-LAB SQLi comment terminator"; \
+    flow:established,to_server; http.uri; content:"'--"; \
+    classtype:web-application-attack; metadata:probe_category sqli; \
+    sid:1001003; rev:1;)
+
+# --- Cross-site scripting ------------------------------------------------
+
+drop http any any -> $HOME_NET any (msg:"SOC-LAB XSS script tag"; \
+    flow:established,to_server; http.uri; content:"<script"; nocase; \
+    classtype:web-application-attack; metadata:probe_category xss; \
+    sid:1002001; rev:1;)
+
+# Event handlers are how most payloads survive tag filtering, so they are
+# matched separately rather than folded into the rule above.
+drop http any any -> $HOME_NET any (msg:"SOC-LAB XSS event handler"; \
+    flow:established,to_server; http.uri; content:"onerror="; nocase; \
+    classtype:web-application-attack; metadata:probe_category xss; \
+    sid:1002002; rev:1;)
+
+# --- Path traversal ------------------------------------------------------
+
+drop http any any -> $HOME_NET any (msg:"SOC-LAB path traversal"; \
+    flow:established,to_server; http.uri; content:"../"; \
+    classtype:web-application-attack; metadata:probe_category traversal; \
+    sid:1003001; rev:1;)
+
+# The encoded form reaches the same file: the web server decodes it, so a
+# rule matching only the literal form would be trivial to step around.
+drop http any any -> $HOME_NET any (msg:"SOC-LAB path traversal encoded"; \
+    flow:established,to_server; http.uri; content:"%2e%2e%2f"; nocase; \
+    classtype:web-application-attack; metadata:probe_category traversal; \
+    sid:1003002; rev:1;)
+
+# --- Command injection ---------------------------------------------------
+
+drop http any any -> $HOME_NET any (msg:"SOC-LAB command injection passwd"; \
+    flow:established,to_server; http.uri; content:"/etc/passwd"; nocase; \
+    classtype:web-application-attack; metadata:probe_category rce; \
+    sid:1004001; rev:1;)
+
+drop http any any -> $HOME_NET any (msg:"SOC-LAB command injection shell"; \
+    flow:established,to_server; http.uri; content:"/bin/"; nocase; \
+    pcre:"/\/bin\/(ba)?sh/i"; \
+    classtype:web-application-attack; metadata:probe_category rce; \
+    sid:1004002; rev:1;)
+
+# --- CRLF injection ------------------------------------------------------
+
+drop http any any -> $HOME_NET any (msg:"SOC-LAB CRLF injection"; \
+    flow:established,to_server; http.uri; content:"%0d%0a"; nocase; \
+    classtype:web-application-attack; metadata:probe_category crlf; \
+    sid:1005001; rev:1;)
+
+# --- XML external entity -------------------------------------------------
+
+# Matched on the request body: entity declarations arrive in an XML document,
+# not in the query string.
+drop http any any -> $HOME_NET any (msg:"SOC-LAB XXE entity declaration"; \
+    flow:established,to_server; http.request_body; content:"<!ENTITY"; nocase; \
+    classtype:web-application-attack; metadata:probe_category xxe; \
+    sid:1006001; rev:1;)
+
+# --- NoSQL injection -----------------------------------------------------
+
+drop http any any -> $HOME_NET any (msg:"SOC-LAB NoSQL operator in body"; \
+    flow:established,to_server; http.request_body; content:"$where"; nocase; \
+    classtype:web-application-attack; metadata:probe_category nosql; \
+    sid:1007001; rev:1;)
+
+drop http any any -> $HOME_NET any (msg:"SOC-LAB NoSQL operator in query"; \
+    flow:established,to_server; http.uri; content:"$ne"; nocase; \
+    classtype:web-application-attack; metadata:probe_category nosql; \
+    sid:1007002; rev:1;)
+
+# --- Outbound ------------------------------------------------------------
+
+# FR-10 covers what leaves the environment after a compromise. Detection
+# there cannot rely on payload shape, so a known test destination stands in
+# for command and control traffic: the request is generated on purpose from
+# the application host, and nothing else in this environment reaches it.
+# http.host is normalized to lowercase, so the content is written in lowercase
+# and nocase is left out: the engine rejects the pair as redundant.
+drop http $HOME_NET any -> any any (msg:"SOC-LAB outbound to IDS test host"; \
+    flow:established,to_server; http.host; content:"testmynids.org"; \
+    classtype:trojan-activity; metadata:probe_category outbound; \
+    sid:1009001; rev:2;)
+
+# The classic response-side signature: a command output that should never
+# appear in a page this environment serves.
+drop http any any -> $HOME_NET any (msg:"SOC-LAB command output in response"; \
+    flow:established,to_client; http.response_body; content:"uid=0(root)"; \
+    classtype:trojan-activity; metadata:probe_category outbound; \
+    sid:1009002; rev:1;)
