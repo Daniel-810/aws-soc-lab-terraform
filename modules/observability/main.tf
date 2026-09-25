@@ -6,7 +6,9 @@ locals {
 
   # The two approaches log the same engine's records, one wrapped in an
   # "event" object (managed) and one flat (Suricata). coalesce() reads
-  # whichever is present, so one query serves both (ADR-030).
+  # whichever is present, so one query serves both (ADR-030). Filters test the
+  # source fields, not the coalesced alias: ispresent() on the alias matched
+  # nothing in Logs Insights although the alias itself was populated.
   network_fields = <<-EOT
     fields @timestamp,
       coalesce(event.alert.signature_id, alert.signature_id) as sid,
@@ -23,7 +25,7 @@ locals {
       groups = var.network_alert_log_groups
       query  = <<-EOT
         ${trimspace(local.network_fields)}
-        | filter ispresent(sid)
+        | filter ispresent(event.alert.signature_id) or ispresent(alert.signature_id)
         | sort @timestamp desc
         | limit 200
       EOT
@@ -33,7 +35,7 @@ locals {
       groups = var.network_alert_log_groups
       query  = <<-EOT
         ${trimspace(local.network_fields)}
-        | filter ispresent(sid)
+        | filter ispresent(event.alert.signature_id) or ispresent(alert.signature_id)
         | stats count(*) as alerts, count_distinct(sid) as signatures by src
         | sort alerts desc
         | limit 20

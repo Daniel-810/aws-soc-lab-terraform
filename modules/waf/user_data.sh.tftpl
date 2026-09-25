@@ -124,15 +124,20 @@ SecAuditLogParts ABCHZ
 SecAuditLogType Serial
 SecAuditLog /var/log/nginx/modsec_audit.log
 
-# Credentials are hidden before the entry is written, so they reach neither
+# Credentials are kept out before the entry is written, so they reach neither
 # the disk nor the log group the entry is shipped to (SR-10, ADR-029).
-# Endpoints that exist to carry them keep their entry without the request
-# body: dropping the part is certain regardless of how the body is encoded.
-# Elsewhere, any argument whose name looks like a secret is masked in place.
-SecRule REQUEST_FILENAME "@rx ^/(?:rest/user/(?:login|change-password|reset-password)|api/Users/?$)" \
+# Masking arguments in place is not available: this engine (libmodsecurity
+# 3) rejects sanitiseMatched as not yet supported. So credentials are kept
+# out by what is recorded instead.
+#
+# Endpoints that carry them in the body keep their entry without the body.
+SecRule REQUEST_FILENAME "@rx ^/(?:rest/user/(?:login|reset-password)|api/Users/?$)" \
     "id:10001,phase:1,nolog,pass,t:none,ctl:auditLogParts=-C"
-SecRule ARGS_NAMES "@rx (?i)(?:pass|secret|token|answer)" \
-    "id:10002,phase:2,nolog,pass,t:none,sanitiseMatched"
+# Password change sends the old and new password in the query string, which
+# every entry records in the request line. Its entries are not written at
+# all; the rules still inspect and block these requests.
+SecRule REQUEST_FILENAME "@streq /rest/user/change-password" \
+    "id:10002,phase:1,nolog,pass,t:none,ctl:auditEngine=Off"
 EOF
 install -o www-data -g adm -m 640 /dev/null /var/log/nginx/modsec_audit.log
 
