@@ -45,6 +45,9 @@ locals {
 # Object Lock can only be switched on when the bucket is created. In
 # compliance mode no one, the root user included, can delete or overwrite a
 # locked version before its retention ends (ADR-032).
+# Accepted: access to this bucket is itself recorded by the trail it
+# holds; object access logs would need another bucket (ADR-032).
+#trivy:ignore:AWS-0089
 resource "aws_s3_bucket" "audit" {
   bucket              = "${local.project}-audit-${local.account_id}"
   object_lock_enabled = true
@@ -80,6 +83,8 @@ resource "aws_s3_bucket_object_lock_configuration" "audit" {
   depends_on = [aws_s3_bucket_versioning.audit]
 }
 
+# Accepted: AWS-managed key, as for the state bucket (ADR-014, ADR-032).
+#trivy:ignore:AWS-0132
 resource "aws_s3_bucket_server_side_encryption_configuration" "audit" {
   bucket = aws_s3_bucket.audit.id
   rule {
@@ -201,6 +206,10 @@ resource "aws_s3_bucket_policy" "audit" {
 # The first copy of management events is free; this is the account's only
 # trail. Log file validation writes signed digests, so a removed or altered
 # log file can be detected (validate-logs).
+# Accepted: AWS-managed key (ADR-032), and delivery to S3 with Object Lock
+# only; a CloudWatch copy would add ingestion cost and no protection.
+#trivy:ignore:AWS-0015
+#trivy:ignore:AWS-0162
 resource "aws_cloudtrail" "audit" {
   name                          = local.trail_name
   s3_bucket_name                = aws_s3_bucket.audit.id

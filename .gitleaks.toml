@@ -20,6 +20,12 @@ description = "AWS account ID embedded in an ARN"
 regex = '''arn:aws[a-z-]*:[a-z0-9-]+:[a-z0-9-]*:[0-9]{12}:'''
 tags = ["aws", "account-id", "SR-10"]
 
+[rules.allowlist]
+# Module tests run against a mocked provider and need ARNs that parse. They
+# use the all-zero placeholder, the same one backend.hcl.example uses; any
+# other twelve digits are still caught.
+regexes = ['''arn:aws[a-z-]*:[a-z0-9-]+:[a-z0-9-]*:0{12}:''']
+
 # The state bucket is named after the account (bootstrap/main.tf builds it from
 # a data source at apply time). A literal bucket name in the code would carry
 # the identifier with it, which is why backend.hcl is injected at init and kept

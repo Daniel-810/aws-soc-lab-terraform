@@ -259,6 +259,9 @@ resource "aws_vpc_security_group_egress_rule" "waf_out_app" {
   })
 }
 
+# Accepted, not fixed: the package archive and Session Manager have no fixed address
+# range to narrow this to (architecture 5.2).
+#trivy:ignore:AWS-0104
 resource "aws_vpc_security_group_egress_rule" "waf_out_internet" {
   security_group_id = aws_security_group.waf.id
   description       = "Outbound HTTPS for session manager endpoints and patching"
@@ -290,6 +293,9 @@ resource "aws_vpc_security_group_ingress_rule" "app_in_waf" {
   })
 }
 
+# Accepted, not fixed: same reason as waf_out_internet; the traffic still passes the
+# inspection layer through NAT (FR-10).
+#trivy:ignore:AWS-0104
 resource "aws_vpc_security_group_egress_rule" "app_out_https" {
   security_group_id = aws_security_group.app.id
   description       = "Outbound HTTPS for session manager endpoints and packages"
@@ -307,6 +313,9 @@ resource "aws_vpc_security_group_egress_rule" "app_out_https" {
 # Known compromise, recorded in architecture section 5.2: distribution package
 # repositories still serve over plaintext HTTP. Narrowing this to the mirrors
 # actually in use is possible but the address ranges are not stable.
+# Accepted, not fixed: also carries the plaintext outbound check the IPS is tested
+# with (rule 1009001).
+#trivy:ignore:AWS-0104
 resource "aws_vpc_security_group_egress_rule" "app_out_http" {
   security_group_id = aws_security_group.app.id
   description       = "Outbound HTTP for distribution package repositories (accepted compromise)"
@@ -394,6 +403,9 @@ resource "aws_vpc_security_group_ingress_rule" "suricata_in_nat" {
 # cannot be narrowed. Managed firewall endpoints have no security group at
 # all, which is why approach B carries more T-30 (lateral movement) risk than
 # approach A. See architecture section 3.3.
+# Accepted, not fixed: a transit instance forwards to destinations it cannot know in
+# advance (T-30, architecture 3.3).
+#trivy:ignore:AWS-0104
 resource "aws_vpc_security_group_egress_rule" "suricata_out_all" {
   security_group_id = aws_security_group.suricata.id
   description       = "Forwarding to arbitrary destinations; cannot be narrowed"

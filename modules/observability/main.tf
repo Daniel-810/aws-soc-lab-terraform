@@ -86,6 +86,9 @@ locals {
 
 # Accepted and rejected traffic both, at every interface in the VPC: what
 # passed is the part a rule-only log never shows (F10, T-06).
+# Accepted: AWS-managed encryption. A customer managed key adds a monthly
+# charge and a key policy to run for a lab brought up on demand (ADR-014).
+#trivy:ignore:AWS-0017
 resource "aws_cloudwatch_log_group" "flow" {
   name              = "/${var.project}/vpc/flow"
   retention_in_days = var.log_retention_days

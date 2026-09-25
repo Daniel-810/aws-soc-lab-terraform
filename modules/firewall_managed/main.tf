@@ -73,6 +73,9 @@ resource "aws_networkfirewall_firewall" "this" {
   }
 }
 
+# Accepted: AWS-managed encryption. A customer managed key adds a monthly
+# charge and a key policy to run for a lab brought up on demand (ADR-014).
+#trivy:ignore:AWS-0017
 resource "aws_cloudwatch_log_group" "alert" {
   name              = "/${var.project}/firewall/alert"
   retention_in_days = var.log_retention_days
@@ -81,6 +84,9 @@ resource "aws_cloudwatch_log_group" "alert" {
   })
 }
 
+# Accepted: AWS-managed encryption. A customer managed key adds a monthly
+# charge and a key policy to run for a lab brought up on demand (ADR-014).
+#trivy:ignore:AWS-0017
 resource "aws_cloudwatch_log_group" "flow" {
   name              = "/${var.project}/firewall/flow"
   retention_in_days = var.log_retention_days
