@@ -25,7 +25,7 @@ resource "aws_networkfirewall_rule_group" "this" {
       # backslash continuation, which the self-managed engine accepts. The file
       # keeps the readable form both engines share (ADR-022); lines are joined
       # only on the way to this API.
-      rules_string = replace(file("${path.module}/rules/attacks.rules"), "/\\\\\\n\\s*/", " ")
+      rules_string = replace(var.rules, "/\\\\\\n\\s*/", " ")
     }
   }
 
