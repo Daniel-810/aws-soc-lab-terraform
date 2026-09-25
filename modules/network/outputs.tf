@@ -21,3 +21,8 @@ output "security_group_ids" {
     suricata = aws_security_group.suricata.id
   }
 }
+
+output "availability_zones" {
+  description = "Availability zones in use, in the order subnets were allocated. Keys of per-zone maps such as firewall endpoints."
+  value       = local.azs
+}

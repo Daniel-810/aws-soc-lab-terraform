@@ -104,12 +104,14 @@ resource "aws_route_table_association" "this" {
   route_table_id = aws_route_table.this[local.route_tables_for[each.value.type]].id
 }
 
-# Phase 8/9에서 검사 계층 타깃으로 교체된다.
-# 검사 계층이 없는 동안 Phase 6·7의 아웃바운드를 위한 임시 경로.
+# 검사를 켜면 방화벽 엔드포인트로, 끄면 IGW로 나간다.
+# 끈 상태는 방화벽이 없던 Phase 6·7의 경로이며, 방화벽을 처음 올린 직후
+# 접근을 확인하는 단계에서도 쓴다(ADR-015).
 resource "aws_route" "waf_default" {
   route_table_id         = aws_route_table.this["waf"].id
   destination_cidr_block = "0.0.0.0/0"
-  gateway_id             = aws_internet_gateway.this.id
+  gateway_id             = var.inspection_enabled ? null : aws_internet_gateway.this.id
+  vpc_endpoint_id        = var.inspection_enabled ? var.inspection_endpoint_id : null
 }
 
 resource "aws_route" "inspect_default" {
@@ -118,18 +120,49 @@ resource "aws_route" "inspect_default" {
   gateway_id             = aws_internet_gateway.this.id
 }
 
-# Phase 8/9에서 검사 계층 타깃으로 교체된다.
-# 검사 계층이 없는 동안 Phase 6·7의 아웃바운드를 위한 임시 경로.
+# NAT을 지난 아웃바운드가 검사 지점을 지나게 하는 경로(FR-10, ADR-009).
 resource "aws_route" "nat_default" {
   route_table_id         = aws_route_table.this["nat"].id
   destination_cidr_block = "0.0.0.0/0"
-  gateway_id             = aws_internet_gateway.this.id
+  gateway_id             = var.inspection_enabled ? null : aws_internet_gateway.this.id
+  vpc_endpoint_id        = var.inspection_enabled ? var.inspection_endpoint_id : null
 }
 
 resource "aws_route" "app_default" {
   route_table_id         = aws_route_table.this["app"].id
   destination_cidr_block = "0.0.0.0/0"
   nat_gateway_id         = aws_nat_gateway.this.id
+}
+
+# 인터넷에서 들어오는 패킷은 IGW에서 목적지 서브넷으로 바로 간다.
+# 게이트웨이에 라우팅 테이블을 붙여야(엣지 연결) 들어오는 쪽도 검사 지점을 지난다.
+resource "aws_route_table" "igw" {
+  count  = var.inspection_enabled ? 1 : 0
+  vpc_id = aws_vpc.this.id
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project}-igw-rt"
+  })
+}
+
+resource "aws_route_table_association" "igw_edge" {
+  count          = var.inspection_enabled ? 1 : 0
+  gateway_id     = aws_internet_gateway.this.id
+  route_table_id = aws_route_table.igw[0].id
+}
+
+# 나가는 경로를 방화벽으로 보낸 서브넷(waf, nat)만 들어오는 경로도 방화벽으로 보낸다.
+# 요청과 응답이 같은 엔드포인트를 지나야 상태 저장 검사가 연결을 추적할 수 있다.
+# 모든 서브넷이 엔드포인트 하나를 쓰므로 az_count를 늘리면 교차 AZ 경로가 된다.
+# NAT이 첫 AZ에 고정된 것과 같은 한계이며 NFR-05 확장 시 함께 고친다.
+resource "aws_route" "igw_to_inspection" {
+  for_each = var.inspection_enabled ? {
+    for k, s in local.subnets : k => s if contains(["waf", "nat"], s.type)
+  } : {}
+
+  route_table_id         = aws_route_table.igw[0].id
+  destination_cidr_block = each.value.cidr
+  vpc_endpoint_id        = var.inspection_endpoint_id
 }
 
 resource "aws_security_group" "waf" {
