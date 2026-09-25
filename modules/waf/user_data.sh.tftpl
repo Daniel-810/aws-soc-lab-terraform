@@ -3,6 +3,9 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
+# --- time source (SR-19, ADR-031) -------------------------------------------
+${time_sync}
+
 # The security group allows 443 out only. The archive serves the same
 # signed packages over HTTPS, so switch rather than open port 80.
 sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources
@@ -84,6 +87,23 @@ fetch-ca "${region}" "${ca_secret_arn}" "$TLS_DIR/app-ca.crt" 600
 
 # Refuse anything that is not a certificate before trusting it.
 openssl x509 -in "$TLS_DIR/app-ca.crt" -noout
+
+# A value in the secret is not proof it belongs to the app now running.
+# When both instances are replaced in one apply, this one can boot first and
+# read the certificate the previous app published, then fail to verify the
+# new app (ADR-017). The CA is kept only once the app presents a certificate
+# it signed; until then it is fetched again.
+ca_deadline=$((SECONDS + 600))
+until curl -sf -o /dev/null --max-time 5 --cacert "$TLS_DIR/app-ca.crt" \
+    --resolve "app.internal:443:${app_private_ip}" https://app.internal/; do
+  if (( SECONDS >= ca_deadline )); then
+    echo "app did not present a certificate signed by the published CA" >&2
+    exit 1
+  fi
+  sleep 10
+  fetch-ca "${region}" "${ca_secret_arn}" "$TLS_DIR/app-ca.crt" 600
+  openssl x509 -in "$TLS_DIR/app-ca.crt" -noout
+done
 
 # The packaged include file is not used, so what loads is listed here.
 # Order matters: the engine defaults come first, then the ruleset, then our

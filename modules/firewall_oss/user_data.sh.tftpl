@@ -4,6 +4,9 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
+# --- time source (SR-19, ADR-031) -------------------------------------------
+${time_sync}
+
 # The security group allows the archive only over HTTPS, as on the WAF.
 sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources
 

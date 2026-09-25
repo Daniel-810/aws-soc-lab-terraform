@@ -106,6 +106,7 @@ resource "aws_instance" "app" {
     app_image     = var.app_image
     ca_secret_arn = var.ca_secret_arn
     region        = data.aws_region.current.region
+    time_sync     = var.time_sync
   })
   user_data_replace_on_change = true
 

@@ -114,6 +114,7 @@ resource "aws_instance" "this" {
     region          = data.aws_region.current.region
     log_group       = aws_cloudwatch_log_group.this.name
     cwagent_install = var.cwagent_install
+    time_sync       = var.time_sync
   }))
   user_data_replace_on_change = true
 

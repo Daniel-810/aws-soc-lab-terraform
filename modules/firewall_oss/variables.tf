@@ -71,3 +71,10 @@ variable "cwagent_install" {
   description = "Shell fragment that installs the CloudWatch agent after verifying its signature"
   type        = string
 }
+
+# Shared by every instance, passed in by the root as the agent installer is:
+# keeps chrony on the link-local Amazon Time Sync Service only (ADR-031).
+variable "time_sync" {
+  description = "Shell fragment that points chrony at the Amazon Time Sync Service only"
+  type        = string
+}

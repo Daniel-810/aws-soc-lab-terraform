@@ -12,8 +12,8 @@ variable "vpc_id" {
 # One entry per deployed approach: the managed firewall's alert group or
 # the Suricata group. Queries read them together, so switching approach
 # does not change the dashboard.
-variable "network_alert_log_groups" {
-  description = "Log groups holding network layer alerts, for whichever approach is deployed"
+variable "ips_alert_log_groups" {
+  description = "Log groups holding IPS alerts, for whichever approach is deployed"
   type        = list(string)
 }
 

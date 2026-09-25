@@ -13,7 +13,7 @@ locals {
   # Suricata). Filters were tried and gave wrong counts in Logs Insights:
   # ispresent() on the coalesced alias matched nothing, and ispresent(a) or
   # ispresent(b), with b absent from the records, returned 9 of 20.
-  network_fields = <<-EOT
+  ips_fields = <<-EOT
     fields @timestamp,
       coalesce(event.alert.signature_id, alert.signature_id) as sid,
       coalesce(event.alert.signature, alert.signature) as signature,
@@ -25,19 +25,19 @@ locals {
   EOT
 
   queries = {
-    network-alerts = {
-      groups = var.network_alert_log_groups
+    ips-alerts = {
+      groups = var.ips_alert_log_groups
       query  = <<-EOT
-        ${trimspace(local.network_fields)}
+        ${trimspace(local.ips_fields)}
         | sort @timestamp desc
         | limit 200
       EOT
     }
 
-    network-top-sources = {
-      groups = var.network_alert_log_groups
+    ips-top-sources = {
+      groups = var.ips_alert_log_groups
       query  = <<-EOT
-        ${trimspace(local.network_fields)}
+        ${trimspace(local.ips_fields)}
         | stats count(*) as alerts, count_distinct(sid) as signatures by src
         | sort alerts desc
         | limit 20
@@ -61,7 +61,7 @@ locals {
     # One request across every layer. Replace PROBE_ID with an id the probe
     # printed; the id travels in the query string, which each layer logs.
     trace-probe = {
-      groups = concat(var.network_alert_log_groups, [var.waf_log_group])
+      groups = concat(var.ips_alert_log_groups, [var.waf_log_group])
       query  = <<-EOT
         fields @timestamp, @log, @message
         | filter @message like /PROBE_ID/
@@ -179,24 +179,24 @@ locals {
   # One entity keeps one colour in every widget (dataviz slots 1 to 3,
   # validated for colour-vision deficiency in the reference palette).
   colours = {
-    waf     = "#2a78d6"
-    network = "#eb6834"
-    flow    = "#1baf7a"
+    waf  = "#2a78d6"
+    ips  = "#eb6834"
+    flow = "#1baf7a"
   }
 }
 
 # Same metric for either approach: the managed record wraps the alert in
 # "event", Suricata's does not. The pattern accepts both, so the dashboard
 # does not change when the approach does.
-resource "aws_cloudwatch_log_metric_filter" "network_blocked" {
-  for_each = toset(var.network_alert_log_groups)
+resource "aws_cloudwatch_log_metric_filter" "ips_blocked" {
+  for_each = toset(var.ips_alert_log_groups)
 
-  name           = "${var.project}-network-blocked-${replace(trimprefix(each.value, "/"), "/", "-")}"
+  name           = "${var.project}-ips-blocked-${replace(trimprefix(each.value, "/"), "/", "-")}"
   log_group_name = each.value
   pattern        = "{ ($.event.alert.action = \"blocked\") || ($.alert.action = \"blocked\") }"
 
   metric_transformation {
-    name      = "NetworkBlocked"
+    name      = "IpsBlocked"
     namespace = local.namespace
     value     = "1"
     unit      = "Count"
@@ -236,8 +236,8 @@ resource "aws_cloudwatch_log_metric_filter" "flow_rejected" {
 # and not built (ADR-031).
 resource "aws_cloudwatch_metric_alarm" "burst" {
   for_each = {
-    network = "NetworkBlocked"
-    waf     = "WafBlocked"
+    ips = "IpsBlocked"
+    waf = "WafBlocked"
   }
 
   alarm_name          = "${var.project}-${each.key}-blocked-burst"
@@ -254,7 +254,7 @@ resource "aws_cloudwatch_metric_alarm" "burst" {
   tags = local.common_tags
 
   depends_on = [
-    aws_cloudwatch_log_metric_filter.network_blocked,
+    aws_cloudwatch_log_metric_filter.ips_blocked,
     aws_cloudwatch_log_metric_filter.waf_blocked,
   ]
 }
@@ -264,24 +264,27 @@ resource "aws_cloudwatch_metric_alarm" "burst" {
 locals {
   region = data.aws_region.current.region
 
-  # Logs Insights charts need a stats query; these reuse the network fields
+  # Logs Insights charts need a stats query; these reuse the IPS fields
   # so they read either approach.
   charts = {
-    network-by-category = {
-      groups = var.network_alert_log_groups
+    ips-by-category = {
+      groups = var.ips_alert_log_groups
       query  = <<-EOT
         fields coalesce(event.alert.metadata.probe_category.0, alert.metadata.probe_category.0) as category
         | stats count(*) as alerts by category
         | sort alerts desc
       EOT
     }
-    network-by-rule = {
-      groups = var.network_alert_log_groups
+    # A table, not bars: rule names are too long for axis labels and were
+    # cut to their shared prefix.
+    ips-by-rule = {
+      groups = var.ips_alert_log_groups
       query  = <<-EOT
-        fields coalesce(event.alert.signature, alert.signature) as rule
-        | stats count(*) as alerts by rule
+        fields coalesce(event.alert.signature_id, alert.signature_id) as sid,
+          coalesce(event.alert.signature, alert.signature) as rule
+        | stats count(*) as alerts by sid, rule
         | sort alerts desc
-        | limit 10
+        | limit 15
       EOT
     }
     # Ports the internet probes and the security groups turn away: blocked
@@ -290,7 +293,8 @@ locals {
       groups = [aws_cloudwatch_log_group.flow.name]
       query  = <<-EOT
         filter action = "REJECT"
-        | stats count(*) as rejected by dstPort
+        | fields concat("port ", dstPort) as port
+        | stats count(*) as rejected by port
         | sort rejected desc
         | limit 10
       EOT
@@ -303,19 +307,21 @@ locals {
   )) }
 
   metric = {
-    waf     = [local.namespace, "WafBlocked", { label = "WAF", color = local.colours.waf }]
-    network = [local.namespace, "NetworkBlocked", { label = "Network layer", color = local.colours.network }]
-    flow    = [local.namespace, "FlowRejected", { label = "Flow rejected", color = local.colours.flow }]
+    waf = [local.namespace, "WafBlocked", { label = "WAF", color = local.colours.waf }]
+    # Shown as IPS: both approaches run the rules inline and drop what matches,
+    # the managed endpoint and Suricata on netfilter queue alike.
+    ips  = [local.namespace, "IpsBlocked", { label = "IPS", color = local.colours.ips }]
+    flow = [local.namespace, "FlowRejected", { label = "Flow rejected", color = local.colours.flow }]
   }
 
   log_widget = { for k, v in {
     # name                  = [x, y, w, h, view]
-    network-by-category = [0, 10, 8, 6, "bar"]
-    network-by-rule     = [8, 10, 8, 6, "bar"]
+    ips-by-category     = [0, 10, 8, 6, "bar"]
+    ips-by-rule         = [8, 10, 8, 6, "table"]
     flow-rejected-ports = [16, 10, 8, 6, "bar"]
-    network-top-sources = [0, 16, 8, 6, "table"]
+    ips-top-sources     = [0, 16, 8, 6, "table"]
     waf-blocked         = [8, 16, 16, 6, "table"]
-    network-alerts      = [0, 22, 24, 7, "table"]
+    ips-alerts          = [0, 22, 24, 7, "table"]
     } : k => {
     type = "log", x = v[0], y = v[1], width = v[2], height = v[3]
     properties = {
@@ -333,7 +339,8 @@ resource "aws_cloudwatch_dashboard" "this" {
   dashboard_body = jsonencode({
     widgets = concat(
       [
-        # Headline: one number per layer over the dashboard's time range.
+        # Headline: one number per layer over the dashboard's time range,
+        # with a sparkline for its shape.
         {
           type = "metric", x = 0, y = 0, width = 24, height = 4
           properties = {
@@ -343,21 +350,36 @@ resource "aws_cloudwatch_dashboard" "this" {
             stat                 = "Sum"
             period               = 60
             setPeriodToTimeRange = true
-            metrics              = [local.metric.waf, local.metric.network, local.metric.flow]
+            sparkline            = true
+            metrics              = [local.metric.waf, local.metric.ips, local.metric.flow]
           }
         },
-        # The two blocking layers over time, on one axis: same unit, same
-        # scale. Flow rejections stay out of it; their volume is driven by
-        # internet scanning and would flatten the other two lines.
+        # One chart per blocking layer rather than two lines on one axis: the
+        # WAF blocks an order of magnitude more than the IPS, and a
+        # shared axis pressed the IPS line flat against zero.
         {
-          type = "metric", x = 0, y = 4, width = 16, height = 6
+          type = "metric", x = 0, y = 4, width = 8, height = 6
           properties = {
-            title   = "Blocks per minute by layer"
+            title   = "WAF blocks per minute"
             region  = local.region
             view    = "timeSeries"
             stat    = "Sum"
             period  = 60
-            metrics = [local.metric.waf, local.metric.network]
+            legend  = { position = "hidden" }
+            metrics = [local.metric.waf]
+            yAxis   = { left = { min = 0, label = "Count", showUnits = false } }
+          }
+        },
+        {
+          type = "metric", x = 8, y = 4, width = 8, height = 6
+          properties = {
+            title   = "IPS blocks per minute"
+            region  = local.region
+            view    = "timeSeries"
+            stat    = "Sum"
+            period  = 60
+            legend  = { position = "hidden" }
+            metrics = [local.metric.ips]
             yAxis   = { left = { min = 0, label = "Count", showUnits = false } }
           }
         },

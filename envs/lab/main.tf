@@ -65,6 +65,7 @@ module "web" {
   instance_type     = "t3.micro"
   app_image         = "bkimminich/juice-shop:v18.0.0"
   ca_secret_arn     = module.secrets.ca_cert_secret_arn
+  time_sync         = local.time_sync
 }
 
 module "waf" {
@@ -77,6 +78,7 @@ module "waf" {
   app_private_ip    = module.web.private_ip
   ca_secret_arn     = module.secrets.ca_cert_secret_arn
   cwagent_install   = local.cwagent_install
+  time_sync         = local.time_sync
 }
 
 # Both approaches load one rule file with one notion of internal, so a
@@ -88,6 +90,9 @@ locals {
 
   # One verified installer for every instance that ships logs (ADR-028).
   cwagent_install = file("${path.module}/../../scripts/install-cloudwatch-agent.sh")
+
+  # Every instance syncs to the link-local time service only (ADR-031).
+  time_sync = file("${path.module}/../../scripts/use-amazon-time-sync.sh")
 }
 
 # Approach A. Only the approach selected by firewall_mode is created: the two
@@ -115,16 +120,17 @@ module "firewall_oss" {
   home_net          = local.home_net
   rules             = local.rules
   cwagent_install   = local.cwagent_install
+  time_sync         = local.time_sync
 }
 
 # Every layer's log in one place and on one screen (FR-05, FR-06). The
-# network layer group follows whichever approach is deployed.
+# IPS alert group follows whichever approach is deployed.
 module "observability" {
   source = "../../modules/observability"
 
   project = "soc-lab"
   vpc_id  = module.network.vpc_id
-  network_alert_log_groups = concat(
+  ips_alert_log_groups = concat(
     [for m in module.firewall_managed : m.alert_log_group],
     [for m in module.firewall_oss : m.log_group],
   )
