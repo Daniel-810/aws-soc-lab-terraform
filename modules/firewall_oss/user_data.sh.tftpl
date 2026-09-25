@@ -1,0 +1,136 @@
+#!/bin/bash
+# Stop on first error: a half-configured transit host either forwards
+# traffic unchecked or drops all of it, and neither shows as a failure.
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+# The security group allows the archive only over HTTPS, as on the WAF.
+sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources
+
+# Retried for the same reason as on the WAF: the route out may not exist yet
+# when this instance boots. --error-on=any because plain update exits 0 even
+# when every mirror is unreachable.
+deadline=$((SECONDS + 600))
+until apt-get update --error-on=any; do
+  if (( SECONDS >= deadline )); then
+    echo "package archive unreachable for 600s" >&2
+    exit 1
+  fi
+  sleep 10
+done
+
+apt-get -o DPkg::Lock::Timeout=300 install -y suricata nftables
+
+# Recorded rather than pinned, as for the WAF (ADR-021). The probe reads
+# this so a result carries the versions it came from (NFR-03).
+dpkg-query -W -f='$${Package} $${Version}\n' suricata libnetfilter-queue1 nftables \
+  > /etc/suricata/soc-lab-versions.txt
+
+# The package starts its own unit in passive capture mode, which only sees
+# copies. It is replaced by the inline unit below, and its log is cleared so
+# the checks further down read only the inline engine's output.
+systemctl disable --now suricata.service
+: > /var/log/suricata/suricata.log
+rm -f /var/log/suricata/eve.json
+
+# --- forwarding (F13) -----------------------------------------------------
+
+# One interface receives and sends the forwarded traffic. Linux would then
+# send ICMP redirects telling the sender to skip this hop, which is to skip
+# inspection. The setting is ORed across "all" and the interface, so both
+# are turned off.
+IFACE=$(ip route show default | awk '{print $5; exit}')
+cat > /etc/sysctl.d/90-soc-lab-forward.conf <<EOF
+net.ipv4.ip_forward = 1
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+net.ipv4.conf.$IFACE.send_redirects = 0
+EOF
+sysctl -p /etc/sysctl.d/90-soc-lab-forward.conf
+
+# --- rules ----------------------------------------------------------------
+
+# The shared file, unchanged (ADR-022). Suricata reads the backslash
+# continuations that the managed API rejects, so no joining is needed here.
+mkdir -p /etc/suricata/soc-lab
+cat > /etc/suricata/soc-lab/attacks.rules <<'RULES_EOF'
+${rules}
+RULES_EOF
+
+# --- engine ---------------------------------------------------------------
+
+# -q 0 reads verdicts from netfilter queue 0: inline, so a drop rule drops.
+# -S loads this rule file only, leaving out the ruleset the package points
+# at; mixing it in would break the comparison with approach A. HOME_NET is
+# set here as the managed rule group sets it through a variable.
+cat > /etc/systemd/system/suricata-ips.service <<'EOF'
+[Unit]
+Description=Suricata inline IPS on netfilter queue 0
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/suricata -c /etc/suricata/suricata.yaml -q 0 -S /etc/suricata/soc-lab/attacks.rules --set vars.address-groups.HOME_NET=${home_net}
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now suricata-ips.service
+
+# Checked here rather than trusted: a unit that is "active" may still not be
+# holding the queue, and then every forwarded packet is dropped with no
+# error anywhere. The kernel lists a queue once a process has bound to it.
+deadline=$((SECONDS + 180))
+until awk '$1 == 0 { found = 1 } END { exit !found }' /proc/net/netfilter/nfnetlink_queue 2>/dev/null; do
+  if (( SECONDS >= deadline )); then
+    echo "suricata did not bind netfilter queue 0" >&2
+    tail -n 30 /var/log/suricata/suricata.log >&2 || true
+    exit 1
+  fi
+  sleep 3
+done
+
+# Every rule in the file has to load. A rule that fails to parse is skipped
+# with a warning and the engine runs on without it.
+expected=$(grep -cE '^(alert|drop|pass|reject) ' /etc/suricata/soc-lab/attacks.rules)
+deadline=$((SECONDS + 120))
+until grep -qE '[0-9]+ rules successfully loaded' /var/log/suricata/suricata.log; do
+  if (( SECONDS >= deadline )); then
+    echo "rule load summary not found in suricata.log" >&2
+    exit 1
+  fi
+  sleep 3
+done
+summary=$(grep -oE '[0-9]+ rules successfully loaded, [0-9]+ rules failed' /var/log/suricata/suricata.log | tail -n 1)
+loaded=$(echo "$summary" | awk '{print $1}')
+failed=$(echo "$summary" | awk '{print $5}')
+if [ "$loaded" != "$expected" ] || [ "$failed" != "0" ]; then
+  echo "rules loaded $loaded of $expected, failed $failed" >&2
+  exit 1
+fi
+
+# --- queue ----------------------------------------------------------------
+
+# Only the forward hook is queued, so this instance's own traffic (Session
+# Manager in particular) is never inspected and survives an engine failure;
+# that is the way back in to fix it. No bypass flag: with nothing reading the
+# queue, forwarded packets are dropped (fail-close, ADR-012).
+cat > /etc/nftables.conf <<'EOF'
+#!/usr/sbin/nft -f
+flush ruleset
+
+table inet ips {
+  chain forward {
+    type filter hook forward priority 0; policy accept;
+    queue num 0
+  }
+}
+EOF
+systemctl enable nftables.service
+systemctl restart nftables.service
+
+# The Ubuntu image ships sshd listening on 22. The security group already
+# blocks it; stopping it removes the listener as well (Session Manager only).
+systemctl disable --now ssh.socket ssh.service

@@ -412,6 +412,59 @@ def collect_firewall(log_group, region, start_ms, run_id,
         time.sleep(interval)
 
 
+# Run on the Suricata instance (approach B). Its events stay on disk until
+# Phase 10 ships them, so they are summarised where they are, as the WAF's
+# audit log is. The records are the engine's own eve format: the same fields
+# the managed firewall logs, without the outer "event" wrapper.
+REMOTE_SURICATA = r"""
+import json, re, sys
+
+prefix = sys.argv[1]
+pattern = re.compile(r"[?&]probe=(probe[0-9a-f]+[nt]\d{4})")
+found = {}
+
+for line in open("/var/log/suricata/eve.json", encoding="utf-8", errors="replace"):
+    try:
+        event = json.loads(line)
+    except ValueError:
+        continue
+    if event.get("event_type") != "alert":
+        continue
+    match = pattern.search(event.get("http", {}).get("url", ""))
+    if not match or not match.group(1).startswith(prefix):
+        continue
+    sid = str(event.get("alert", {}).get("signature_id", ""))
+    found.setdefault(match.group(1), set()).add(sid)
+
+for probe_id in sorted(found):
+    print(probe_id, ",".join(sorted(found[probe_id])))
+"""
+
+
+def collect_suricata(instance_id, region, run_id):
+    """Return {probe id: [signature ids]} for probes Suricata alerted on.
+
+    Same shape as collect_firewall, so either feeds the firewall column.
+    """
+    output = _ssm_run(
+        instance_id,
+        region,
+        f"sudo python3 - probe{run_id} <<'PROBE_EOF'\n{REMOTE_SURICATA}\nPROBE_EOF",
+    )
+    found = {}
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) == 2:
+            found[parts[0]] = parts[1].split(",")
+    return found
+
+
+def collect_suricata_context(instance_id, region):
+    """Return the Suricata package versions the run was measured on."""
+    output = _ssm_run(instance_id, region, "cat /etc/suricata/soc-lab-versions.txt")
+    return dict(line.split(None, 1) for line in output.splitlines() if " " in line)
+
+
 # --- scoring -------------------------------------------------------------
 
 def score(results, detections, blocked_status=403, key="type"):
@@ -539,17 +592,35 @@ def _send_all(probes, host, schemes, timeout, workers):
 
 
 def run(host, instance_id, region, schemes=("https", "http"),
-        firewall_log_group=None, timeout=5, workers=16):
+        firewall_log_group=None, suricata_instance_id=None,
+        timeout=5, workers=16):
     """Send every payload over each scheme, then score what each layer logged.
 
-    firewall_log_group is None when no network firewall is in the path,
-    as in Phase 7; only the WAF is read then.
+    The network layer is read from whichever approach is deployed: the
+    managed firewall's log group (approach A) or the Suricata instance
+    (approach B). Neither is given when no network layer is in the path, as
+    in Phase 7; only the WAF is read then.
     """
+    if firewall_log_group and suricata_instance_id:
+        raise ValueError("one network layer is deployed at a time")
+
     context = collect_context(instance_id, region)
     context["run_id"] = f"{secrets.token_hex(3)}"
     context["firewall_log_group"] = firewall_log_group
+    context["network_layer"] = (
+        "managed" if firewall_log_group
+        else "suricata" if suricata_instance_id
+        else None
+    )
+    if suricata_instance_id:
+        context["suricata_instance_id"] = suricata_instance_id
+        context["suricata_packages"] = collect_suricata_context(
+            suricata_instance_id, region
+        )
     versions = ", ".join(f"{k} {v}" for k, v in sorted(context["packages"].items()))
     print(f"run {context['run_id']} | engine {context['engine']} | {versions}")
+    if context["network_layer"]:
+        print(f"network layer: {context['network_layer']}")
 
     probes = build_probes(load_all(), run_id=context["run_id"])
     probes += build_traffic_probes(run_id=context["run_id"])
@@ -572,7 +643,11 @@ def run(host, instance_id, region, schemes=("https", "http"),
         firewall = collect_firewall(
             firewall_log_group, region, start_ms, context["run_id"]
         )
-        print(f"{len(firewall)} of {len(probes)} probes appear in the firewall log")
+    elif suricata_instance_id:
+        firewall = collect_suricata(suricata_instance_id, region, context["run_id"])
+    if context["network_layer"]:
+        print(f"{len(firewall)} of {len(probes)} probes appear in the "
+              f"{context['network_layer']} network layer log")
 
     summary = score(results, detections)
     print_summary(summary)
@@ -581,7 +656,7 @@ def run(host, instance_id, region, schemes=("https", "http"),
     print()
 
     layers = score_layers(results, detections, firewall)
-    if firewall_log_group:
+    if context["network_layer"]:
         print_layers(layers)
     return results, detections, firewall, summary, layers, context
 
@@ -620,6 +695,11 @@ if __name__ == "__main__":
         help="network firewall alert log group, e.g. /soc-lab/firewall/alert; "
              "leave out when no firewall is in the path",
     )
+    parser.add_argument(
+        "--suricata-instance-id",
+        help="Suricata instance id when approach B is deployed; "
+             "use instead of --firewall-log-group",
+    )
     parser.add_argument("--timeout", type=float, default=5,
                         help="seconds to wait for each response")
     parser.add_argument("--workers", type=int, default=16,
@@ -628,4 +708,5 @@ if __name__ == "__main__":
 
     save(*run(args.host, args.instance_id, args.region,
               firewall_log_group=args.firewall_log_group,
+              suricata_instance_id=args.suricata_instance_id,
               timeout=args.timeout, workers=args.workers))

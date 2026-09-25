@@ -29,6 +29,14 @@ variable "home_net" {
   }
 }
 
+# Passed in rather than read from inside the module: the self-managed engine
+# in Phase 9 loads the same file, and one source is what keeps the two
+# approaches comparable (ADR-022).
+variable "rules" {
+  description = "Suricata rules the rule group enforces, in the shared file's readable form"
+  type        = string
+}
+
 # Capacity cannot be changed after creation: raising it means replacing the
 # rule group and pointing the policy at the new one. The rule file currently
 # holds 15 rules, so this leaves room to add without a replacement.

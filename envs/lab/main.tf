@@ -42,10 +42,12 @@ module "network" {
   waf_ingress_cidrs = ["${chomp(data.http.operator_ip.response_body)}/32"]
 
   # The firewall is created in the network's subnets and the network routes
-  # through the firewall's endpoint. Terraform resolves this per resource, so
-  # the two modules can feed each other without a cycle.
+  # through the firewall. Terraform resolves this per resource, so the
+  # modules can feed each other without a cycle (ADR-024). Only the deployed
+  # approach yields a target; one() turns the other's empty list into null.
   inspection_enabled     = var.route_through_firewall
-  inspection_endpoint_id = module.firewall.endpoint_ids[module.network.availability_zones[0]]
+  inspection_endpoint_id = one([for m in module.firewall_managed : m.endpoint_ids[local.az]])
+  inspection_eni_id      = one(module.firewall_oss[*].eni_id)
 }
 
 module "secrets" {
@@ -76,11 +78,36 @@ module "waf" {
   ca_secret_arn     = module.secrets.ca_cert_secret_arn
 }
 
-module "firewall" {
+# Both approaches load one rule file with one notion of internal, so a
+# difference between them comes from how they are run (ADR-022).
+locals {
+  az       = module.network.availability_zones[0]
+  rules    = file("${path.module}/../../rules/attacks.rules")
+  home_net = "10.20.0.0/16"
+}
+
+# Approach A. Only the approach selected by firewall_mode is created: the two
+# are never compared at the same time, and the managed endpoint bills by the
+# hour whether or not traffic is routed to it (ADR-026).
+module "firewall_managed" {
   source = "../../modules/firewall_managed"
+  count  = var.firewall_mode == "managed" ? 1 : 0
 
   project    = "soc-lab"
   vpc_id     = module.network.vpc_id
-  subnet_ids = [module.network.subnet_ids["inspect_mgd-${module.network.availability_zones[0]}"]]
-  home_net   = "10.20.0.0/16"
+  subnet_ids = [module.network.subnet_ids["inspect_mgd-${local.az}"]]
+  home_net   = local.home_net
+  rules      = local.rules
+}
+
+# Approach B.
+module "firewall_oss" {
+  source = "../../modules/firewall_oss"
+  count  = var.firewall_mode == "oss" ? 1 : 0
+
+  project           = "soc-lab"
+  subnet_id         = module.network.subnet_ids["inspect_oss-${local.az}"]
+  security_group_id = module.network.security_group_ids["suricata"]
+  home_net          = local.home_net
+  rules             = local.rules
 }

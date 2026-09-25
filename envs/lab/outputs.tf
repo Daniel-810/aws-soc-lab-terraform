@@ -22,6 +22,11 @@ output "waf_public_ip" {
 }
 
 output "firewall_endpoint_ids" {
-  description = "Firewall endpoint id per availability zone, used as a route target"
-  value       = module.firewall.endpoint_ids
+  description = "Managed firewall endpoint id per availability zone (approach A), null otherwise"
+  value       = one(module.firewall_managed[*].endpoint_ids)
+}
+
+output "suricata_instance_id" {
+  description = "Inspection instance id (approach B), null otherwise. Used to read its logs."
+  value       = one(module.firewall_oss[*].instance_id)
 }

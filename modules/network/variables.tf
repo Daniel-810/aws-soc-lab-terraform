@@ -48,13 +48,24 @@ variable "inspection_enabled" {
   default     = false
 }
 
+# Two inputs because a route names its target by kind: a managed firewall
+# endpoint and an instance's network interface are different arguments.
+# Exactly one is set, according to the approach deployed (ADR-026).
 variable "inspection_endpoint_id" {
-  description = "Firewall endpoint the waf and nat subnets route through when inspection is enabled"
+  description = "Managed firewall endpoint the waf and nat subnets route through (approach A)"
+  type        = string
+  default     = null
+}
+
+variable "inspection_eni_id" {
+  description = "Network interface of the self-managed inspection instance the waf and nat subnets route through (approach B)"
   type        = string
   default     = null
 
   validation {
-    condition     = !var.inspection_enabled || var.inspection_endpoint_id != null
-    error_message = "inspection_endpoint_id is required when inspection_enabled is true."
+    condition = !var.inspection_enabled || (
+      (var.inspection_endpoint_id == null) != (var.inspection_eni_id == null)
+    )
+    error_message = "When inspection_enabled is true, set exactly one of inspection_endpoint_id and inspection_eni_id."
   }
 }

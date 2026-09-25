@@ -104,7 +104,7 @@ resource "aws_route_table_association" "this" {
   route_table_id = aws_route_table.this[local.route_tables_for[each.value.type]].id
 }
 
-# 검사를 켜면 방화벽 엔드포인트로, 끄면 IGW로 나간다.
+# 검사를 켜면 검사 계층(방식 A 엔드포인트 또는 방식 B 인스턴스의 ENI)으로, 끄면 IGW로 나간다.
 # 끈 상태는 방화벽이 없던 Phase 6·7의 경로이며, 방화벽을 처음 올린 직후
 # 접근을 확인하는 단계에서도 쓴다(ADR-015).
 resource "aws_route" "waf_default" {
@@ -112,6 +112,7 @@ resource "aws_route" "waf_default" {
   destination_cidr_block = "0.0.0.0/0"
   gateway_id             = var.inspection_enabled ? null : aws_internet_gateway.this.id
   vpc_endpoint_id        = var.inspection_enabled ? var.inspection_endpoint_id : null
+  network_interface_id   = var.inspection_enabled ? var.inspection_eni_id : null
 }
 
 resource "aws_route" "inspect_default" {
@@ -126,6 +127,7 @@ resource "aws_route" "nat_default" {
   destination_cidr_block = "0.0.0.0/0"
   gateway_id             = var.inspection_enabled ? null : aws_internet_gateway.this.id
   vpc_endpoint_id        = var.inspection_enabled ? var.inspection_endpoint_id : null
+  network_interface_id   = var.inspection_enabled ? var.inspection_eni_id : null
 }
 
 resource "aws_route" "app_default" {
@@ -163,6 +165,7 @@ resource "aws_route" "igw_to_inspection" {
   route_table_id         = aws_route_table.igw[0].id
   destination_cidr_block = each.value.cidr
   vpc_endpoint_id        = var.inspection_endpoint_id
+  network_interface_id   = var.inspection_eni_id
 }
 
 resource "aws_security_group" "waf" {
@@ -318,11 +321,18 @@ resource "aws_vpc_security_group_egress_rule" "app_out_http" {
   })
 }
 
+# Traffic bound for the WAF passes through this interface first, so it is
+# opened to the same sources the WAF accepts and no wider (ADR-019). The
+# group cannot tell forwarded packets from ones addressed to the instance
+# itself, and the instance has a public address of its own (ADR-027): a
+# wider rule would expose that address as well.
 resource "aws_vpc_security_group_ingress_rule" "suricata_in_http" {
-  security_group_id = aws_security_group.suricata.id
-  description       = "Inbound HTTP being routed through inspection"
+  for_each = toset(var.waf_ingress_cidrs)
 
-  cidr_ipv4   = "0.0.0.0/0"
+  security_group_id = aws_security_group.suricata.id
+  description       = "HTTP bound for the WAF, from the sources the WAF accepts"
+
+  cidr_ipv4   = each.value
   ip_protocol = "tcp"
   from_port   = 80
   to_port     = 80
@@ -333,16 +343,35 @@ resource "aws_vpc_security_group_ingress_rule" "suricata_in_http" {
 }
 
 resource "aws_vpc_security_group_ingress_rule" "suricata_in_https" {
-  security_group_id = aws_security_group.suricata.id
-  description       = "Inbound HTTPS being routed through inspection"
+  for_each = toset(var.waf_ingress_cidrs)
 
-  cidr_ipv4   = "0.0.0.0/0"
+  security_group_id = aws_security_group.suricata.id
+  description       = "HTTPS bound for the WAF, from the sources the WAF accepts"
+
+  cidr_ipv4   = each.value
   ip_protocol = "tcp"
   from_port   = 443
   to_port     = 443
 
   tags = merge(local.common_tags, {
     Name = "${var.project}-suricata-in-https"
+  })
+}
+
+# The WAF's own outbound calls (package archive, Session Manager) leave on
+# 443 and reach this interface before the internet gateway. Narrowing the
+# rules above to the operator would otherwise cut them off.
+resource "aws_vpc_security_group_ingress_rule" "suricata_in_waf" {
+  security_group_id = aws_security_group.suricata.id
+  description       = "WAF egress on 443 passing through inspection"
+
+  cidr_ipv4   = local.subnets["waf-${local.azs[0]}"].cidr
+  ip_protocol = "tcp"
+  from_port   = 443
+  to_port     = 443
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project}-suricata-in-waf"
   })
 }
 

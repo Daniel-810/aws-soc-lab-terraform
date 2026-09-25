@@ -8,9 +8,10 @@ be traced to the layer that detected it even when nothing is blocked. That is
 what a status code alone cannot show: in detection-only mode (`ADR-018`
 stage 2) the response looks identical whether or not a rule matched.
 
-Two layers are read today: the WAF's ModSecurity audit log, and the managed
-network firewall's alert log (Phase 8). Suricata on the self-managed path
-follows in Phase 9, using the same ids.
+Three sources are read: the WAF's ModSecurity audit log, and the network
+layer that is deployed, either the managed firewall's alert log in
+CloudWatch (approach A) or Suricata's `eve.json` on its instance (approach B).
+All three use the same ids, so the two approaches fill the same table.
 
 Results are kept per scheme. The network firewall sits in front of TLS
 termination, so it can only act on the plaintext leg; sending the same probe
@@ -25,6 +26,10 @@ $env:AWS_PROFILE = "soc-lab"
 # with the managed firewall in the path
 .venv\Scripts\python.exe probe.py --host <waf public ip> --instance-id <waf instance id> `
     --firewall-log-group /soc-lab/firewall/alert
+
+# with Suricata in the path (approach B)
+.venv\Scripts\python.exe probe.py --host <waf public ip> --instance-id <waf instance id> `
+    --suricata-instance-id <suricata instance id>
 ```
 
 Both values come from `terraform output` in `envs/lab`. The WAF only answers
