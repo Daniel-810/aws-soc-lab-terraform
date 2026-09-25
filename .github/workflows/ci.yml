@@ -69,10 +69,16 @@ jobs:
             echo "::endgroup::"
           done
 
-      # envs/lab declares a backend whose bucket name is injected at init time
-      # and is not in the repository (F16). Initialising without the backend
-      # still resolves the module tree, which is what validate needs.
-      - name: Validate lab environment
+      # Each environment declares a backend whose bucket name is injected at
+      # init time and is not in the repository (F16). Initialising without the
+      # backend still resolves the module tree, which is what validate needs.
+      # Every directory under envs/ is covered, the persistent audit
+      # environment included.
+      - name: Validate environments
         run: |
-          terraform -chdir=envs/lab init -backend=false -input=false
-          terraform -chdir=envs/lab validate
+          for dir in envs/*/; do
+            echo "::group::$dir"
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+            echo "::endgroup::"
+          done

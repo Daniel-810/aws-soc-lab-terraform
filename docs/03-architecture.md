@@ -266,7 +266,7 @@ AZ-c   10.20.32.0/20
 | Suricata (방식 B) | 로그 에이전트, **경보만** | `/soc-lab/suricata` (스트림 `eve-alert`) | `SR-14`, `SR-16` |
 | ModSecurity 감사 로그 | 로그 에이전트, **기록 전 마스킹** | `/soc-lab/waf` (스트림 `modsec-audit`) | `FR-05`, `SR-10` |
 | VPC 흐름 로그 | 서비스 네이티브, 허용과 거부 모두 | `/soc-lab/vpc/flow` | `SR-15` |
-| API 호출 감사 | 서비스 네이티브 | CloudTrail → 삭제 방지 버킷 (Phase 10-2) | `SR-23` |
+| API 호출 감사 | 서비스 네이티브, 전 리전, 무결성 검증 | CloudTrail `soc-lab-audit` → Object Lock 버킷(규정 준수 1일). **상시 환경 `envs/audit`** (`ADR-032`) | `SR-23`, `SR-17` |
 
 로그 에이전트는 공개키 지문을 고정해 서명을 검증한 뒤 설치한다(`ADR-028`).
 수집 선별과 쿼리 통합은 `ADR-030`, 마스킹은 `ADR-029`에 있다.
@@ -274,13 +274,14 @@ AZ-c   10.20.32.0/20
 #### 보존 및 무결성
 
 ```
-CloudWatch Logs (14일)  →  S3  →  Object Lock (규정 준수 모드)
-                                    보존 기간 내 삭제 불가
+CloudTrail  →  S3 (envs/audit, 상시)  →  Object Lock 규정 준수 1일
+                                         보존 기간 내 루트도 삭제 불가
+CloudWatch Logs (14일)  →  잠금 없음 (범위 밖, ADR-032 결과)
 ```
 
 | 통제 | 근거 |
 |---|---|
-| 보존 기간 14일 후 S3 이관 | `NFR-06`, 비용 |
+| CloudWatch 보존 14일 | `NFR-06`, 비용. S3 이관은 하지 않음(`ADR-032`) |
 | Object Lock 규정 준수 모드 | `SR-17` — **루트 권한으로도 삭제 불가** |
 | 로그 파일 무결성 검증 활성화 | `SR-23` |
 
