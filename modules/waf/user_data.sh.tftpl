@@ -10,7 +10,19 @@ sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources
 # The image's package lists date from its build; stale entries 404 once a
 # newer version replaces them in the archive. --error-on=any because plain
 # update exits 0 even when every mirror is unreachable.
-apt-get update --error-on=any
+#
+# Retried because this instance can boot before its route out exists: the
+# default route waits on the firewall whenever inspection is wired in, which
+# takes minutes. A single attempt fails the boot for good. Other faults still
+# surface, only later, once the deadline passes.
+deadline=$((SECONDS + 600))
+until apt-get update --error-on=any; do
+  if (( SECONDS >= deadline )); then
+    echo "package archive unreachable for 600s" >&2
+    exit 1
+  fi
+  sleep 10
+done
 
 # First boot may run unattended-upgrades in the background; wait for its
 # lock instead of failing.
