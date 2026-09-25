@@ -9,3 +9,8 @@ output "public_ip" {
   description = "Public address clients and test tools reach the WAF on"
   value       = aws_eip.waf.public_ip
 }
+
+output "log_group" {
+  description = "Log group the agent ships the ModSecurity audit entries to"
+  value       = aws_cloudwatch_log_group.this.name
+}

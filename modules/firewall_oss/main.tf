@@ -5,8 +5,7 @@ locals {
   }
 }
 
-# Created now so the role can be scoped to it; the agent that ships eve.json
-# here arrives in Phase 10 together with the other instances' agents.
+# The agent ships the engine's alerts here (Phase 10).
 resource "aws_cloudwatch_log_group" "this" {
   name              = "/${var.project}/suricata"
   retention_in_days = var.log_retention_days
@@ -77,6 +76,8 @@ resource "aws_iam_instance_profile" "this" {
   })
 }
 
+data "aws_region" "current" {}
+
 data "aws_ami" "this" {
   owners      = ["099720109477"] # Canonical
   most_recent = true
@@ -104,10 +105,16 @@ resource "aws_instance" "this" {
   # Elastic IP, since nothing needs to reach this address (ADR-027).
   associate_public_ip_address = true
 
-  user_data = templatefile("${path.module}/user_data.sh.tftpl", {
-    home_net = var.home_net
-    rules    = var.rules
-  })
+  # Compressed: the script carries the whole rule file and the agent
+  # installer, and uncompressed it sits within 1 KiB of the 16 KiB user data
+  # limit. cloud-init detects gzip and unpacks it (ADR-027).
+  user_data_base64 = base64gzip(templatefile("${path.module}/user_data.sh.tftpl", {
+    home_net        = var.home_net
+    rules           = var.rules
+    region          = data.aws_region.current.region
+    log_group       = aws_cloudwatch_log_group.this.name
+    cwagent_install = var.cwagent_install
+  }))
   user_data_replace_on_change = true
 
   metadata_options {

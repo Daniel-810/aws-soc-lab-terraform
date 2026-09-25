@@ -30,3 +30,8 @@ output "suricata_instance_id" {
   description = "Inspection instance id (approach B), null otherwise. Used to read its logs."
   value       = one(module.firewall_oss[*].instance_id)
 }
+
+output "dashboard_name" {
+  description = "CloudWatch dashboard gathering the layers on one screen"
+  value       = module.observability.dashboard_name
+}

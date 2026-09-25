@@ -65,3 +65,10 @@ variable "ami_name_pattern" {
   type        = string
   default     = "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-20260904"
 }
+
+# The shared installer in scripts/, passed in by the root as the rule file
+# is, so both boot scripts run the same verified install (ADR-028).
+variable "cwagent_install" {
+  description = "Shell fragment that installs the CloudWatch agent after verifying its signature"
+  type        = string
+}

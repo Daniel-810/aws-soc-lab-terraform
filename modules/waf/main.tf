@@ -102,9 +102,11 @@ resource "aws_instance" "waf" {
   iam_instance_profile   = aws_iam_instance_profile.waf.name
 
   user_data = templatefile("${path.module}/user_data.sh.tftpl", {
-    app_private_ip = var.app_private_ip
-    ca_secret_arn  = var.ca_secret_arn
-    region         = data.aws_region.current.region
+    app_private_ip  = var.app_private_ip
+    ca_secret_arn   = var.ca_secret_arn
+    region          = data.aws_region.current.region
+    log_group       = aws_cloudwatch_log_group.this.name
+    cwagent_install = var.cwagent_install
   })
   user_data_replace_on_change = true
 

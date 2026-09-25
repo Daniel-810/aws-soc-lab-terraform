@@ -117,12 +117,22 @@ SecRuleEngine On
 # missing from this log was not detected. Parts: A audit header, B request
 # headers (carries X-Probe-Id), C request body (needed to judge true or
 # false positives), H rule messages, Z end marker. Response bodies are left
-# out for size and because they carry user data. Masking is Phase 10.
+# out for size and because they carry user data.
 SecAuditEngine RelevantOnly
 SecAuditLogFormat JSON
 SecAuditLogParts ABCHZ
 SecAuditLogType Serial
 SecAuditLog /var/log/nginx/modsec_audit.log
+
+# Credentials are hidden before the entry is written, so they reach neither
+# the disk nor the log group the entry is shipped to (SR-10, ADR-029).
+# Endpoints that exist to carry them keep their entry without the request
+# body: dropping the part is certain regardless of how the body is encoded.
+# Elsewhere, any argument whose name looks like a secret is masked in place.
+SecRule REQUEST_FILENAME "@rx ^/(?:rest/user/(?:login|change-password|reset-password)|api/Users/?$)" \
+    "id:10001,phase:1,nolog,pass,t:none,ctl:auditLogParts=-C"
+SecRule ARGS_NAMES "@rx (?i)(?:pass|secret|token|answer)" \
+    "id:10002,phase:2,nolog,pass,t:none,sanitiseMatched"
 EOF
 install -o www-data -g adm -m 640 /dev/null /var/log/nginx/modsec_audit.log
 
@@ -168,6 +178,37 @@ EOF
 
 nginx -t
 systemctl restart nginx
+
+# --- log shipping (Phase 10) ------------------------------------------------
+
+REGION="${region}"
+VERSIONS_FILE=/etc/nginx/modsec-versions.txt
+${cwagent_install}
+
+# Only the audit log leaves the instance: it already holds just the flagged
+# transactions (SR-16). The stream name is fixed rather than the instance
+# id, so a replaced instance keeps writing to the same place (SR-14).
+cat > /opt/aws/amazon-cloudwatch-agent/etc/soc-lab.json <<'EOF'
+{
+  "agent": { "run_as_user": "root" },
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "/var/log/nginx/modsec_audit.log",
+            "log_group_name": "${log_group}",
+            "log_stream_name": "modsec-audit",
+            "timezone": "UTC"
+          }
+        ]
+      }
+    }
+  }
+}
+EOF
+/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+  -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/soc-lab.json
 
 # The Ubuntu image ships sshd listening on 22. The security group already
 # blocks it (SR-01); access goes through Session Manager, so stop the
