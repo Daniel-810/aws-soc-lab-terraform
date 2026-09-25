@@ -226,3 +226,54 @@ resource "aws_cloudtrail" "audit" {
 
   depends_on = [aws_s3_bucket_policy.audit]
 }
+
+# --- account baseline (Phase 11, Prowler) --------------------------------------
+
+# Settings that apply to the whole account rather than to the lab, so they
+# live with the other persistent controls. Each closes a finding from the
+# Prowler audit at no cost (ADR-034). The EBS, metadata and Access Analyzer
+# settings are regional; this account works in Seoul only.
+
+# New volumes are encrypted even when a resource does not ask for it. The lab
+# instances already set it explicitly (ADR-033); this covers anything else.
+resource "aws_ebs_encryption_by_default" "this" {
+  enabled = true
+}
+
+# New instances require IMDSv2 unless they say otherwise, closing the gap the
+# original environment left open (F6) for resources created outside this code.
+resource "aws_ec2_instance_metadata_defaults" "this" {
+  http_tokens = "required"
+}
+
+# No bucket in this account is meant to be public. Blocking at the account
+# level holds even if a bucket's own block is removed.
+resource "aws_s3_account_public_access_block" "this" {
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# Reports resources shared outside the account. The external access
+# analyzer carries no charge.
+resource "aws_accessanalyzer_analyzer" "this" {
+  analyzer_name = "${local.project}-account"
+  type          = "ACCOUNT"
+
+  tags = local.common_tags
+}
+
+# Length and variety, and no reuse. No expiry: NIST SP 800-63B advises
+# against periodic changes, which push users towards predictable passwords;
+# a change is forced on evidence of compromise instead. Prowler's 90-day
+# expiry check therefore stays open by decision (ADR-034).
+resource "aws_iam_account_password_policy" "this" {
+  minimum_password_length        = 14
+  require_lowercase_characters   = true
+  require_uppercase_characters   = true
+  require_numbers                = true
+  require_symbols                = true
+  allow_users_to_change_password = true
+  password_reuse_prevention      = 24
+}
