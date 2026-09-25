@@ -15,6 +15,9 @@ provider "aws" {
 
 data "aws_caller_identity" "current" {}
 
+# Accepted: API calls on this bucket are in the CloudTrail trail (ADR-032);
+# per-object access logs would need a second bucket to hold them.
+#trivy:ignore:AWS-0089
 resource "aws_s3_bucket" "state" {
   bucket = "soc-lab-tfstate-${data.aws_caller_identity.current.account_id}"
 }
@@ -26,6 +29,8 @@ resource "aws_s3_bucket_versioning" "state" {
   }
 }
 
+# Accepted: AWS-managed key by decision (ADR-014).
+#trivy:ignore:AWS-0132
 resource "aws_s3_bucket_server_side_encryption_configuration" "state" {
   bucket = aws_s3_bucket.state.id
 

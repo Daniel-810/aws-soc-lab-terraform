@@ -6,6 +6,9 @@ locals {
 }
 
 # The agent ships the engine's alerts here (Phase 10).
+# Accepted: AWS-managed encryption. A customer managed key adds a monthly
+# charge and a key policy to run for a lab brought up on demand (ADR-014).
+#trivy:ignore:AWS-0017
 resource "aws_cloudwatch_log_group" "this" {
   name              = "/${var.project}/suricata"
   retention_in_days = var.log_retention_days
@@ -117,6 +120,12 @@ resource "aws_instance" "this" {
     time_sync       = var.time_sync
   }))
   user_data_replace_on_change = true
+
+  # Encrypted at rest with the AWS-managed EBS key: no cost, and the disk
+  # holds logs and TLS keys. Left out until Trivy flagged it (AWS-0131).
+  root_block_device {
+    encrypted = true
+  }
 
   metadata_options {
     http_endpoint               = "enabled"

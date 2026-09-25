@@ -5,6 +5,9 @@ locals {
   }
 }
 
+# Accepted: the secret holds a public CA certificate only, never a key
+# (ADR-017), so a customer managed key would protect nothing secret.
+#trivy:ignore:AWS-0098
 resource "aws_secretsmanager_secret" "this" {
   # Holds only the public CA certificate. No value is written here, so the
   # private key never reaches state (ADR-017).
