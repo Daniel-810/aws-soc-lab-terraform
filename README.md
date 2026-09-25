@@ -251,6 +251,35 @@ terraform destroy
 > Windows PowerShell 환경에서는 `-이름=값` 형태의 인자를 따옴표로 감싸야 한다.
 > `terraform init "-backend-config=backend.hcl"`
 
+### 검사 방식 선택
+
+검사 계층은 변수 두 개로 정한다. 방식은 한 번에 하나만 배포한다([`ADR-026`](docs/adr/026-firewall-mode-switch.md)).
+
+| 변수 | 정하는 것 | 값 | 기본값 |
+|---|---|---|---|
+| `firewall_mode` | 어느 방식을 만들지 | `managed` (방식 A) / `oss` (방식 B) | `managed` |
+| `route_through_firewall` | 트래픽을 검사 계층으로 보낼지 | `true` / `false` | `false` |
+
+검사 계층을 먼저 만들고 관리 접근을 확인한 뒤 경로를 켠다. 두 작업을 한 번에 적용하면
+문제가 생겼을 때 원인이 정책인지 경로인지 구분할 수 없고, 관리 접근이 끊길 수 있다([`ADR-024`](docs/adr/024-inspection-routing-switch.md)).
+
+```bash
+# 방식 A — 관리형 방화벽
+terraform apply                                          # 1차: 검사 계층 생성, 경로는 그대로
+terraform apply -var=route_through_firewall=true         # 2차: 경로 전환
+
+# 방식 B — Suricata
+terraform apply -var=firewall_mode=oss
+terraform apply -var=firewall_mode=oss -var=route_through_firewall=true
+```
+
+- **배포한 뒤에는 같은 값을 계속 넘긴다.** Terraform은 이전 실행의 변수 값을 기억하지 않는다. 방식 B로 배포한 뒤
+  `-var=firewall_mode=oss`를 빼고 실행하면 기본값 `managed`로 해석되어, Suricata를 삭제하고 관리형 방화벽을
+  새로 만드는 계획이 나온다. 계획에 예상하지 않은 삭제가 보이면 변수를 빠뜨린 것이다.
+- **방식을 바꿀 때는 경로를 먼저 끈다.** 경로를 켠 채로 방식을 바꾸면 새 검사 계층이 기동하는 동안 트래픽이 끊긴다.
+- 변수 값을 파일(`terraform.tfvars`)에 두지 않고 명령에 적는다. 두 방식을 번갈아 측정하는 동안
+  지금 무엇이 배포되어 있는지가 명령에 드러나게 하기 위해서다.
+
 ---
 
 ## 비용 운용
