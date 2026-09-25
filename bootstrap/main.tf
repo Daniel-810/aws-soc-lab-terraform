@@ -50,6 +50,33 @@ resource "aws_s3_bucket_public_access_block" "state" {
   restrict_public_buckets = true
 }
 
+# Terraform reaches the state over TLS; refusing anything else closes the
+# plaintext path for every other client too (Prowler, ADR-034).
+data "aws_iam_policy_document" "state" {
+  statement {
+    sid       = "DenyInsecureTransport"
+    effect    = "Deny"
+    actions   = ["s3:*"]
+    resources = [aws_s3_bucket.state.arn, "${aws_s3_bucket.state.arn}/*"]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "state" {
+  bucket = aws_s3_bucket.state.id
+  policy = data.aws_iam_policy_document.state.json
+
+  depends_on = [aws_s3_bucket_public_access_block.state]
+}
+
 output "bucket_name" {
   value = aws_s3_bucket.state.id
 }
