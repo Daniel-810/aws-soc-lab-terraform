@@ -40,6 +40,12 @@ module "network" {
   vpc_cidr          = "10.20.0.0/16"
   az_count          = 1
   waf_ingress_cidrs = ["${chomp(data.http.operator_ip.response_body)}/32"]
+
+  # The firewall is created in the network's subnets and the network routes
+  # through the firewall's endpoint. Terraform resolves this per resource, so
+  # the two modules can feed each other without a cycle.
+  inspection_enabled     = var.route_through_firewall
+  inspection_endpoint_id = module.firewall.endpoint_ids[module.network.availability_zones[0]]
 }
 
 module "secrets" {
@@ -68,4 +74,13 @@ module "waf" {
   instance_type     = "t3.micro"
   app_private_ip    = module.web.private_ip
   ca_secret_arn     = module.secrets.ca_cert_secret_arn
+}
+
+module "firewall" {
+  source = "../../modules/firewall_managed"
+
+  project    = "soc-lab"
+  vpc_id     = module.network.vpc_id
+  subnet_ids = [module.network.subnet_ids["inspect_mgd-${module.network.availability_zones[0]}"]]
+  home_net   = "10.20.0.0/16"
 }

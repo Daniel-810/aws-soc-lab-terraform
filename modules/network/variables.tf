@@ -37,3 +37,24 @@ variable "waf_ingress_cidrs" {
     error_message = "waf_ingress_cidrs must hold at least one valid IPv4 CIDR."
   }
 }
+
+# ADR-015: routes switch to the inspection layer only after the firewall is up
+# and management access has been confirmed. Kept separate from the endpoint id
+# because count must be known at plan time, and a firewall created in the same
+# run has an id that is not known until apply.
+variable "inspection_enabled" {
+  description = "Send internet-bound and internet-sourced traffic of the waf and nat subnets through the inspection endpoint"
+  type        = bool
+  default     = false
+}
+
+variable "inspection_endpoint_id" {
+  description = "Firewall endpoint the waf and nat subnets route through when inspection is enabled"
+  type        = string
+  default     = null
+
+  validation {
+    condition     = !var.inspection_enabled || var.inspection_endpoint_id != null
+    error_message = "inspection_endpoint_id is required when inspection_enabled is true."
+  }
+}

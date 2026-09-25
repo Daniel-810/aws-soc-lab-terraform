@@ -1,10 +1,12 @@
 """Send tagged probes through the lab and check which layer saw them."""
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote, quote_plus
 import argparse
 import http.client
 import json
+import re
 import secrets
 import ssl
 import subprocess
@@ -251,15 +253,19 @@ for line in open("/var/log/nginx/modsec_audit.log", encoding="utf-8", errors="re
     if probe_id is None or not probe_id.startswith(prefix):
         continue
 
-    rules = found.setdefault(probe_id, set())
+    # Each probe goes out over both schemes, and the network firewall in
+    # front only sees the plaintext one. Keeping them apart is what shows
+    # which layer stopped a request on which path (T-11).
+    scheme = {80: "http", 443: "https"}.get(tx.get("host_port"), "unknown")
+
+    rules = found.setdefault((probe_id, scheme), set())
     for m in tx.get("messages", []):
         rule = m.get("details", {}).get("ruleId")
         if rule:
             rules.add(str(rule))
 
-# One line per probe, not per log entry: a probe is sent over both schemes.
-for probe_id in sorted(found):
-    print(probe_id, ",".join(sorted(found[probe_id])))
+for probe_id, scheme in sorted(found):
+    print(probe_id, scheme, ",".join(sorted(found[(probe_id, scheme)])))
 """
 
 
@@ -326,7 +332,7 @@ def collect_context(instance_id, region):
 
 
 def collect(instance_id, region, run_id=None):
-    """Return {probe id: [rule ids]} for the probes the WAF logged.
+    """Return {probe id: {scheme: [rule ids]}} for the probes the WAF logged.
 
     The log keeps earlier runs, so entries from other runs are dropped.
     """
@@ -339,15 +345,71 @@ def collect(instance_id, region, run_id=None):
 
     detections = {}
     for line in output.splitlines():
-        parts = line.split(None, 1)
-        if not parts:
+        parts = line.split()
+        if len(parts) < 2:
             continue
-        probe_id = parts[0]
-        rules = parts[1].split(",") if len(parts) > 1 and parts[1] else []
-        # One probe can appear twice: it is sent over both 80 and 443.
-        detections.setdefault(probe_id, [])
-        detections[probe_id] = sorted(set(detections[probe_id]) | set(rules))
+        probe_id, scheme = parts[0], parts[1]
+        rules = parts[2].split(",") if len(parts) > 2 else []
+        detections.setdefault(probe_id, {})[scheme] = rules
     return detections
+
+
+# The firewall's alert log does not keep request headers, so X-Probe-Id is
+# not there. Every placement also puts the id in the query string, and the
+# log records the URL, so that is where it is read from.
+PROBE_IN_URL = re.compile(r"[?&]probe=(probe[0-9a-f]+[nt]\d{4})")
+
+
+def _read_alerts(log_group, region, start_ms):
+    """Return every event in log_group since start_ms, parsed."""
+    output = subprocess.run(
+        [
+            "aws", "logs", "filter-log-events",
+            "--region", region,
+            "--log-group-name", log_group,
+            "--start-time", str(start_ms),
+            "--query", "events[].message",
+            "--output", "json",
+        ],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    return [json.loads(m) for m in json.loads(output or "[]")]
+
+
+def collect_firewall(log_group, region, start_ms, run_id,
+                     settle=90, max_wait=300, interval=20):
+    """Return {probe id: [signature ids]} for probes the firewall alerted on.
+
+    The managed firewall delivers its log to CloudWatch in batches, from
+    twenty seconds to over a minute behind the traffic in this lab. Reading
+    once would count only what had arrived, so the log is read until the
+    count stops growing: first after settle seconds, then every interval,
+    for at most max_wait. settle has to cover the slowest delivery seen: two
+    empty reads in a row also count as settled, and a first run stopped at
+    zero that way while the alerts were still on their way.
+
+    Only the plaintext leg can appear here. Over 443 the firewall sees
+    ciphertext, which is the difference this measurement exists to show.
+    """
+    prefix = f"probe{run_id}"
+    time.sleep(settle)
+    deadline = time.monotonic() + max_wait
+    found, previous = {}, -1
+
+    while True:
+        found = {}
+        for record in _read_alerts(log_group, region, start_ms):
+            event = record.get("event", {})
+            match = PROBE_IN_URL.search(event.get("http", {}).get("url", ""))
+            if not match or not match.group(1).startswith(prefix):
+                continue
+            sid = str(event.get("alert", {}).get("signature_id", ""))
+            found.setdefault(match.group(1), set()).add(sid)
+
+        if len(found) == previous or time.monotonic() > deadline:
+            return {k: sorted(v) for k, v in found.items()}
+        previous = len(found)
+        time.sleep(interval)
 
 
 # --- scoring -------------------------------------------------------------
@@ -375,7 +437,7 @@ def score(results, detections, blocked_status=403, key="type"):
     summary = {}
     for entry in results:
         probe = entry["probe"]
-        rules = detections.get(probe["id"], [])
+        rules = detections.get(probe["id"], {}).get(entry["scheme"], [])
         row = summary.setdefault(
             probe[key], {"sent": 0, "flagged": 0, "detected": 0, "blocked": 0}
         )
@@ -403,12 +465,89 @@ def print_summary(summary, title="type"):
         print(f"{name:<18}{row['sent']:>6}{row['flagged']:>9}{detected:>13}{blocked:>13}")
 
 
+def _no_response(status):
+    """True when the request got no answer: the firewall drops silently."""
+    return isinstance(status, str) and "timed out" in status
+
+
+def score_layers(results, waf, firewall, blocked_status=403):
+    """Count, per scheme and payload type, which layer caught each request.
+
+    firewall — the network firewall alerted on it (plaintext leg only)
+    waf      — the WAF's anomaly threshold was crossed
+    either   — at least one of the two; what the stack as a whole caught
+    silent   — no response came back, the mark of a firewall drop
+
+    A request the firewall drops never reaches the WAF, so on the plaintext
+    leg the waf column counts only what got past the firewall. The two
+    columns are therefore not independent rates and are not meant to be
+    added.
+    """
+    summary = {}
+    for entry in results:
+        probe, scheme = entry["probe"], entry["scheme"]
+        fw_hit = probe["id"] in firewall if scheme == "http" else False
+        waf_hit = ANOMALY_RULE in waf.get(probe["id"], {}).get(scheme, [])
+
+        row = summary.setdefault(scheme, {}).setdefault(
+            probe["type"],
+            {"sent": 0, "firewall": 0, "waf": 0, "either": 0, "silent": 0},
+        )
+        row["sent"] += 1
+        row["firewall"] += fw_hit
+        row["waf"] += waf_hit
+        row["either"] += fw_hit or waf_hit
+        row["silent"] += _no_response(entry["status"])
+    return summary
+
+
+def print_layers(summary):
+    """Print one table per scheme: which layer caught what."""
+    for scheme in sorted(summary):
+        rows = summary[scheme]
+        print(f"[{scheme}]")
+        print(f"{'type':<18}{'sent':>6}{'firewall':>10}{'waf':>7}{'either':>13}{'silent':>8}")
+        for name in sorted(rows, key=lambda n: (n in (BENIGN, TRAFFIC), n)):
+            r = rows[name]
+            either = f"{r['either']} ({round(100 * r['either'] / r['sent'], 1)}%)"
+            print(f"{name:<18}{r['sent']:>6}{r['firewall']:>10}{r['waf']:>7}{either:>13}{r['silent']:>8}")
+        print()
+
+
 # --- run -----------------------------------------------------------------
 
-def run(host, instance_id, region, schemes=("https", "http")):
-    """Send every payload over each scheme, then score what the WAF logged."""
+def _send_all(probes, host, schemes, timeout, workers):
+    """Send every probe over each scheme and return the results in order.
+
+    Sent in parallel because a firewall drop gives no answer, so each dropped
+    request waits out the full timeout; in sequence a few hundred drops
+    would take longer than the rest of the run.
+    """
+    def one(job):
+        probe, scheme = job
+        try:
+            status = send(probe, host, scheme=scheme, timeout=timeout)
+        except OSError as e:
+            # A refused or timed out request is a result too: a layer may
+            # drop the connection instead of answering.
+            status = f"error: {e}"
+        return {"probe": probe, "scheme": scheme, "status": status}
+
+    jobs = [(probe, scheme) for scheme in schemes for probe in probes]
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(one, jobs))
+
+
+def run(host, instance_id, region, schemes=("https", "http"),
+        firewall_log_group=None, timeout=5, workers=16):
+    """Send every payload over each scheme, then score what each layer logged.
+
+    firewall_log_group is None when no network firewall is in the path,
+    as in Phase 7; only the WAF is read then.
+    """
     context = collect_context(instance_id, region)
     context["run_id"] = f"{secrets.token_hex(3)}"
+    context["firewall_log_group"] = firewall_log_group
     versions = ", ".join(f"{k} {v}" for k, v in sorted(context["packages"].items()))
     print(f"run {context['run_id']} | engine {context['engine']} | {versions}")
 
@@ -416,30 +555,39 @@ def run(host, instance_id, region, schemes=("https", "http")):
     probes += build_traffic_probes(run_id=context["run_id"])
     print(f"sending {len(probes)} requests over {', '.join(schemes)}")
 
-    results = []
-    for scheme in schemes:
-        for probe in probes:
-            try:
-                status = send(probe, host, scheme=scheme)
-            except OSError as e:
-                # A refused or timed out request is a result too: a layer
-                # may drop the connection instead of answering.
-                status = f"error: {e}"
-            results.append({"probe": probe, "scheme": scheme, "status": status})
+    # The firewall log is read by time window, so the window opens before
+    # the first request leaves.
+    start_ms = int(time.time() * 1000)
+    # Saved so the firewall log can be read again for this run later.
+    context["start_ms"] = start_ms
+    results = _send_all(probes, host, schemes, timeout, workers)
 
     # Give the audit log a moment to reach disk before reading it.
     time.sleep(5)
     detections = collect(instance_id, region, run_id=context["run_id"])
     print(f"{len(detections)} of {len(probes)} probes appear in the WAF log")
 
+    firewall = {}
+    if firewall_log_group:
+        firewall = collect_firewall(
+            firewall_log_group, region, start_ms, context["run_id"]
+        )
+        print(f"{len(firewall)} of {len(probes)} probes appear in the firewall log")
+
     summary = score(results, detections)
     print_summary(summary)
     print()
     print_summary(score(results, detections, key="placement"), title="placement")
-    return results, detections, summary, context
+    print()
+
+    layers = score_layers(results, detections, firewall)
+    if firewall_log_group:
+        print_layers(layers)
+    return results, detections, firewall, summary, layers, context
 
 
-def save(results, detections, summary, context, directory=RESULT_DIR):
+def save(results, detections, firewall, summary, layers, context,
+         directory=RESULT_DIR):
     """Write one timestamped run to results/ (git ignored: SR-10)."""
     directory.mkdir(exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -449,7 +597,9 @@ def save(results, detections, summary, context, directory=RESULT_DIR):
             {
                 "context": context,
                 "summary": summary,
+                "layers": layers,
                 "detections": detections,
+                "firewall": firewall,
                 "results": results,
             },
             f,
@@ -465,6 +615,17 @@ if __name__ == "__main__":
     parser.add_argument("--host", required=True, help="WAF public address")
     parser.add_argument("--instance-id", required=True, help="WAF instance id")
     parser.add_argument("--region", default="ap-northeast-2")
+    parser.add_argument(
+        "--firewall-log-group",
+        help="network firewall alert log group, e.g. /soc-lab/firewall/alert; "
+             "leave out when no firewall is in the path",
+    )
+    parser.add_argument("--timeout", type=float, default=5,
+                        help="seconds to wait for each response")
+    parser.add_argument("--workers", type=int, default=16,
+                        help="requests in flight at once")
     args = parser.parse_args()
 
-    save(*run(args.host, args.instance_id, args.region))
+    save(*run(args.host, args.instance_id, args.region,
+              firewall_log_group=args.firewall_log_group,
+              timeout=args.timeout, workers=args.workers))

@@ -20,3 +20,8 @@ output "waf_public_ip" {
   description = "Public address the WAF answers on"
   value       = module.waf.public_ip
 }
+
+output "firewall_endpoint_ids" {
+  description = "Firewall endpoint id per availability zone, used as a route target"
+  value       = module.firewall.endpoint_ids
+}

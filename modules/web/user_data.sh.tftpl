@@ -2,7 +2,17 @@
 # Stop on first error: otherwise the instance comes up healthy with no app.
 set -euo pipefail
 
-dnf install -y docker nginx openssl
+# Retried because this instance can boot before the NAT gateway and its
+# route are ready; a single attempt would fail the boot for good. Other
+# faults still surface once the deadline passes.
+deadline=$((SECONDS + 600))
+until dnf install -y docker nginx openssl; do
+  if (( SECONDS >= deadline )); then
+    echo "package repository unreachable for 600s" >&2
+    exit 1
+  fi
+  sleep 10
+done
 systemctl enable --now docker
 
 # Plaintext on 3000, reachable from this host only. nginx in front
