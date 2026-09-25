@@ -377,13 +377,16 @@ def _read_alerts(log_group, region, start_ms):
 
 
 def collect_firewall(log_group, region, start_ms, run_id,
-                     settle=40, max_wait=300, interval=20):
+                     settle=90, max_wait=300, interval=20):
     """Return {probe id: [signature ids]} for probes the firewall alerted on.
 
-    The managed firewall delivers its log to CloudWatch in batches, about
-    twenty seconds behind the traffic in this lab. Reading once would count
-    only what had arrived, so the log is read until the count stops growing:
-    first after settle seconds, then every interval, for at most max_wait.
+    The managed firewall delivers its log to CloudWatch in batches, from
+    twenty seconds to over a minute behind the traffic in this lab. Reading
+    once would count only what had arrived, so the log is read until the
+    count stops growing: first after settle seconds, then every interval,
+    for at most max_wait. settle has to cover the slowest delivery seen: two
+    empty reads in a row also count as settled, and a first run stopped at
+    zero that way while the alerts were still on their way.
 
     Only the plaintext leg can appear here. Over 443 the firewall sees
     ciphertext, which is the difference this measurement exists to show.
@@ -555,6 +558,8 @@ def run(host, instance_id, region, schemes=("https", "http"),
     # The firewall log is read by time window, so the window opens before
     # the first request leaves.
     start_ms = int(time.time() * 1000)
+    # Saved so the firewall log can be read again for this run later.
+    context["start_ms"] = start_ms
     results = _send_all(probes, host, schemes, timeout, workers)
 
     # Give the audit log a moment to reach disk before reading it.
