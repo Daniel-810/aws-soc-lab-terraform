@@ -277,3 +277,48 @@ resource "aws_iam_account_password_policy" "this" {
   allow_users_to_change_password = true
   password_reuse_prevention      = 24
 }
+
+# --- cost guard (NFR-04) ---------------------------------------------------------
+
+# Created in the console before any resource existed (Phase 4), so that the
+# first mistake would already be caught. Brought under code afterwards by
+# importing it (ADR-035); the name is kept so the import maps onto it. From
+# an empty account the same code creates it.
+resource "aws_budgets_budget" "monthly" {
+  name         = "My Monthly Cost Budget"
+  budget_type  = "COST"
+  limit_amount = format("%.1f", var.monthly_budget_usd)
+  limit_unit   = "USD"
+  time_unit    = "MONTHLY"
+
+  # The account is paid from credits. Counting cost after credits would read
+  # zero and no alert would fire until the credits ran out, so credits and
+  # refunds are left out: the budget measures what the lab actually uses.
+  metrics = ["UnblendedCost"]
+  filter_expression {
+    not {
+      dimensions {
+        key    = "RECORD_TYPE"
+        values = ["Credit", "Refund"]
+      }
+    }
+  }
+  billing_view_arn = "arn:aws:billing::${local.account_id}:billingview/primary"
+
+  # Half of the month's money spent, all of it spent, and a forecast that it
+  # will be: the last one warns while there is still time to stop.
+  dynamic "notification" {
+    for_each = [
+      { type = "ACTUAL", threshold = 50 },
+      { type = "ACTUAL", threshold = 100 },
+      { type = "FORECASTED", threshold = 100 },
+    ]
+    content {
+      notification_type          = notification.value.type
+      comparison_operator        = "GREATER_THAN"
+      threshold                  = notification.value.threshold
+      threshold_type             = "PERCENTAGE"
+      subscriber_email_addresses = var.budget_alert_emails
+    }
+  }
+}
