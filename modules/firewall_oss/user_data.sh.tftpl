@@ -36,20 +36,35 @@ systemctl disable --now suricata.service
 : > /var/log/suricata/suricata.log
 rm -f /var/log/suricata/eve.json
 
-# --- forwarding (F13) -----------------------------------------------------
+# The order below is what keeps this fail-close from the first packet
+# (ADR-012). The queue goes in before anything can be forwarded, and
+# forwarding is switched on last, only after the engine holds the queue with
+# every rule loaded. A step that fails stops the script with forwarding
+# still off, so a broken boot drops traffic instead of passing it unchecked.
+# Forwarding used to be switched on first and the queue added last: every
+# packet in between was forwarded uninspected, and a failed check left the
+# instance an open router (found in review, 2026-09-26).
 
-# One interface receives and sends the forwarded traffic. Linux would then
-# send ICMP redirects telling the sender to skip this hop, which is to skip
-# inspection. The setting is ORed across "all" and the interface, so both
-# are turned off.
-IFACE=$(ip route show default | awk '{print $5; exit}')
-cat > /etc/sysctl.d/90-soc-lab-forward.conf <<EOF
-net.ipv4.ip_forward = 1
-net.ipv4.conf.all.send_redirects = 0
-net.ipv4.conf.default.send_redirects = 0
-net.ipv4.conf.$IFACE.send_redirects = 0
+# --- queue ------------------------------------------------------------------
+
+# Only the forward hook is queued, so this instance's own traffic (Session
+# Manager in particular) is never inspected and survives an engine failure;
+# that is the way back in to fix it. No bypass flag: with nothing reading the
+# queue, forwarded packets are dropped. nftables loads at boot ahead of the
+# network, so after a reboot the queue is back before any packet arrives.
+cat > /etc/nftables.conf <<'EOF'
+#!/usr/sbin/nft -f
+flush ruleset
+
+table inet ips {
+  chain forward {
+    type filter hook forward priority 0; policy accept;
+    queue num 0
+  }
+}
 EOF
-sysctl -p /etc/sysctl.d/90-soc-lab-forward.conf
+systemctl enable nftables.service
+systemctl restart nftables.service
 
 # --- rules ----------------------------------------------------------------
 
@@ -114,25 +129,22 @@ if [ "$loaded" != "$expected" ] || [ "$failed" != "0" ]; then
   exit 1
 fi
 
-# --- queue ----------------------------------------------------------------
+# --- forwarding (F13) -----------------------------------------------------
 
-# Only the forward hook is queued, so this instance's own traffic (Session
-# Manager in particular) is never inspected and survives an engine failure;
-# that is the way back in to fix it. No bypass flag: with nothing reading the
-# queue, forwarded packets are dropped (fail-close, ADR-012).
-cat > /etc/nftables.conf <<'EOF'
-#!/usr/sbin/nft -f
-flush ruleset
-
-table inet ips {
-  chain forward {
-    type filter hook forward priority 0; policy accept;
-    queue num 0
-  }
-}
+# Last, now that inspection is in place. One interface receives and sends the
+# forwarded traffic, so Linux would send ICMP redirects telling the sender to
+# skip this hop, which is to skip inspection. The setting is ORed across
+# "all" and the interface, so both are turned off. The file is written only
+# here, so an instance whose boot failed stays without forwarding after a
+# reboot as well.
+IFACE=$(ip route show default | awk '{print $5; exit}')
+cat > /etc/sysctl.d/90-soc-lab-forward.conf <<EOF
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+net.ipv4.conf.$IFACE.send_redirects = 0
+net.ipv4.ip_forward = 1
 EOF
-systemctl enable nftables.service
-systemctl restart nftables.service
+sysctl -p /etc/sysctl.d/90-soc-lab-forward.conf
 
 # --- log shipping (Phase 10) ------------------------------------------------
 
