@@ -25,8 +25,19 @@ data "aws_iam_policy_document" "assume_role" {
       type        = "Service"
       identifiers = ["ec2.amazonaws.com"]
     }
+    # EC2 may assume this role only for this account's instances (confused
+    # deputy, Prowler iam_role_cross_service_confused_deputy_prevention).
+    # Whether EC2 supplies this key when it delivers instance credentials is
+    # verified by deployment (ADR-036).
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
   }
 }
+
+data "aws_caller_identity" "current" {}
 
 # Not shared with any other tier (SR-07).
 resource "aws_iam_role" "this" {
