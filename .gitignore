@@ -57,4 +57,5 @@ desktop.ini
 # public address and request bodies, so they stay out of the repository (SR-10).
 tools/probe/.venv/
 tools/probe/results/
+tools/verify/results/
 __pycache__/
