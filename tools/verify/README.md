@@ -24,7 +24,7 @@ checks are skipped for approach A without routing.
 | A spoofed X-Forwarded-For does not replace the real client address | SR-18 |
 | The app container cannot reach instance metadata; the host can | SR-02 |
 | Every instance takes time from the link-local service only | SR-19 |
-| Suricata holds the queue with every rule loaded | SR-13 |
+| Suricata holds the queue with every rule in the file loaded, and forwarding is on | SR-13 |
 | WAF detection over HTTPS at least 40%; real traffic flagged by no layer | AC-05a, AC-05b |
 | Recent events in every log group | FR-05, SR-14 |
 
