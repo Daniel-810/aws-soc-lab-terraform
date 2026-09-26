@@ -63,9 +63,14 @@ module "web" {
   subnet_id         = module.network.subnet_ids["app-ap-northeast-2a"]
   security_group_id = module.network.security_group_ids["app"]
   instance_type     = "t3.micro"
-  app_image         = "bkimminich/juice-shop:v18.0.0"
-  ca_secret_arn     = module.secrets.ca_cert_secret_arn
-  time_sync         = local.time_sync
+  # Pinned by digest as well as tag (SR-25). A tag can be moved to another
+  # image by whoever publishes it; the digest cannot. Docker pulls by the
+  # digest and the tag is kept only so the version stays readable. The digest
+  # is the multi-platform index for v18.0.0 (linux/amd64 included), looked
+  # up from Docker Hub on 2026-09-26.
+  app_image     = "bkimminich/juice-shop:v18.0.0@sha256:491566e56179a3c81697a35e2b5adede6fa4445db511c15bf4c637c1e9c19c6b"
+  ca_secret_arn = module.secrets.ca_cert_secret_arn
+  time_sync     = local.time_sync
 }
 
 module "waf" {
