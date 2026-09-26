@@ -14,6 +14,7 @@ from pathlib import Path
 import argparse
 import http.client
 import json
+import re
 import secrets
 import ssl
 import subprocess
@@ -25,6 +26,7 @@ import probe  # noqa: E402  (shares the request and Run Command helpers)
 
 ROOT = Path(__file__).resolve().parents[2]
 LAB = ROOT / "envs" / "lab"
+RULES = ROOT / "rules" / "attacks.rules"
 RESULT_DIR = Path(__file__).parent / "results"
 
 # One marker the app's own traffic never contains, so the audit log lookup
@@ -224,11 +226,20 @@ def check_suricata(ctx):
     iid = ctx["instances"].get("suricata")
     if not iid:
         return (True, "approach A deployed; not applicable")
+    # Counted from the rule file the way the boot script counts it, so adding
+    # a rule does not make a healthy instance fail this check.
+    expected = len(re.findall(r"^(?:alert|drop|pass|reject) ",
+                              RULES.read_text(encoding="utf-8"), re.MULTILINE))
     out = remote(iid, ctx["region"],
                  "awk '$1 == 0 {print \"QUEUE_BOUND\"}' /proc/net/netfilter/nfnetlink_queue; "
+                 "echo \"FORWARD=$(sysctl -n net.ipv4.ip_forward)\"; "
                  "grep -o '[0-9]* rules successfully loaded, [0-9]* rules failed' /var/log/suricata/suricata.log | tail -n 1")
-    ok = "QUEUE_BOUND" in out and "15 rules successfully loaded, 0 rules failed" in out
-    return (ok, " ".join(out.split()))
+    # Forwarding is switched on as the boot script's last step, only once
+    # the queue and the rules have passed (ADR-027), so it being on also
+    # says the boot got that far.
+    ok = ("QUEUE_BOUND" in out and "FORWARD=1" in out
+          and f"{expected} rules successfully loaded, 0 rules failed" in out)
+    return (ok, f"expected {expected} rules; " + " ".join(out.split()))
 
 
 def check_detection(ctx):

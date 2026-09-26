@@ -46,13 +46,16 @@ locals {
 
     # 949110 is the rule CRS records when the anomaly score crosses the
     # threshold, which is what the engine acts on. A match on any other rule
-    # is a scored finding, not a verdict (see tools/probe).
+    # is a scored finding, not a verdict (see tools/probe). The number is
+    # matched as a rule id only: the entry also carries the request line,
+    # and a request that merely contains the number must not count. Inside
+    # the request line JSON escapes the quotes, so it cannot form this text.
     waf-blocked = {
       groups = [var.waf_log_group]
       query  = <<-EOT
         fields @timestamp, transaction.client_ip as src,
           transaction.request.method as method, transaction.request.uri as uri
-        | filter @message like /949110/
+        | filter @message like /"ruleId":\s*"?949110/
         | sort @timestamp desc
         | limit 200
       EOT
@@ -207,11 +210,14 @@ resource "aws_cloudwatch_log_metric_filter" "ips_blocked" {
 }
 
 # 949110 is recorded when the CRS anomaly score crosses the threshold, the
-# point at which the engine blocks.
+# point at which the engine blocks. Matched in the rule id field, not
+# anywhere in the entry: the entry also carries the request, and a plain
+# "949110" pattern counted any flagged request that contained the number
+# (found in review, checked with test-metric-filter on sample entries).
 resource "aws_cloudwatch_log_metric_filter" "waf_blocked" {
   name           = "${var.project}-waf-blocked"
   log_group_name = var.waf_log_group
-  pattern        = "\"949110\""
+  pattern        = "{ $.transaction.messages[*].details.ruleId = \"949110\" }"
 
   metric_transformation {
     name      = "WafBlocked"

@@ -9,8 +9,3 @@ output "private_ip" {
   description = "Private address of the application instance"
   value       = aws_instance.app.private_ip
 }
-
-output "log_group_name" {
-  description = "Log group the application writes to. The instance role is scoped to this group alone (SR-06)."
-  value       = aws_cloudwatch_log_group.this.name
-}
