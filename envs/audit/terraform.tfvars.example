@@ -1,0 +1,2 @@
+# Budget alert addresses: personal, kept out of the repository.
+budget_alert_emails = ["name@example.com"]
