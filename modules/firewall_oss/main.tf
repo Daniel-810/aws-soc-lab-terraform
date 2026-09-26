@@ -133,7 +133,7 @@ resource "aws_instance" "this" {
   user_data_replace_on_change = true
 
   # Encrypted at rest with the AWS-managed EBS key: no cost, and the disk
-  # holds logs and TLS keys. Left out until Trivy flagged it (AWS-0131).
+  # holds the engine's logs. Left out until Trivy flagged it (AWS-0131).
   root_block_device {
     encrypted = true
   }

@@ -5,16 +5,10 @@ locals {
   }
 }
 
-# Accepted: AWS-managed encryption. A customer managed key adds a monthly
-# charge and a key policy to run for a lab brought up on demand (ADR-014).
-#trivy:ignore:AWS-0017
-resource "aws_cloudwatch_log_group" "this" {
-  name              = "/${var.project}/app"
-  retention_in_days = var.log_retention_days
-  tags = merge(local.common_tags, {
-    Name = "${var.project}-app-logs"
-  })
-}
+# No log group here. The app is not a security layer, so it runs no log
+# agent and ships nothing (SR-16); the WAF in front of it records every
+# flagged request. A group and a write permission were created in Phase 6
+# and never used, until review removed them (2026-09-26).
 
 data "aws_iam_policy_document" "assume_role" {
   statement {
@@ -48,18 +42,8 @@ resource "aws_iam_role" "app" {
 }
 
 data "aws_iam_policy_document" "app" {
-  statement {
-    effect  = "Allow"
-    actions = ["logs:CreateLogStream", "logs:PutLogEvents"]
-    resources = [
-      aws_cloudwatch_log_group.this.arn,
-      "${aws_cloudwatch_log_group.this.arn}:*",
-    ]
-  }
-
   # These actions do not support resource-level permissions, so the scope
-  # cannot be narrowed. The log permissions above are limited to this
-  # module's log group (SR-06).
+  # cannot be narrowed (SR-06).
   statement {
     effect = "Allow"
     actions = [
@@ -125,7 +109,7 @@ resource "aws_instance" "app" {
   user_data_replace_on_change = true
 
   # Encrypted at rest with the AWS-managed EBS key: no cost, and the disk
-  # holds logs and TLS keys. Left out until Trivy flagged it (AWS-0131).
+  # holds the app's data and its TLS key. Left out until Trivy flagged it (AWS-0131).
   root_block_device {
     encrypted = true
   }
