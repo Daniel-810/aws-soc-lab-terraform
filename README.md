@@ -1,117 +1,115 @@
-# AWS SOC Lab — Terraform Rebuild
+# AWS SOC Lab — Terraform 재구성
 
-In 2025 I built a cloud security monitoring lab on AWS by hand in the console. This repository rebuilds it in Terraform. Going back through the original build manual, I found 16 defects, and the rebuild fixes them.
+2025년에 두 명이서 AWS 콘솔로 직접 구성했던 클라우드 보안관제 실습 환경을, 혼자 Terraform 코드로 다시 만든 저장소다. 원래 구축 매뉴얼을 처음부터 다시 따라가며 재구성 기준에 맞지 않는 부분 16건을 결함으로 정리했고, 재구성에서 모두 고쳤다.
 
-The main goal was to build the network inspection layer two ways — managed (AWS Network Firewall) and self-operated (Suricata on EC2) — and measure how two implementations that meet the same requirements differ in practice. The comparison and its conclusion are in [`docs/06-comparison.md`](docs/06-comparison.md).
+가장 큰 목표는 네트워크 검사 계층을 관리형(AWS Network Firewall)과 직접 운영(EC2 위의 Suricata) 두 가지로 만들어, 같은 요구사항을 만족하는 두 구현이 실제 운영에서 어떻게 다른지 재 보는 것이었다. 비교 결과와 결론은 [`docs/06-comparison.md`](docs/06-comparison.md)에 있다.
 
-> This is a test environment, not a production design. Some choices were made on purpose so that each layer's visibility could be observed. How it differs from a production setup, and why, is in [`docs/03-architecture.md`](docs/03-architecture.md) section 5.
+> 이 환경은 운영용 설계가 아니라 시험용이다. 계층마다 무엇이 보이는지 관찰하려고 일부러 그렇게 둔 부분이 있다. 운영 환경과 무엇이 다르고 왜 그렇게 했는지는 [`docs/03-architecture.md`](docs/03-architecture.md) 5절에 적었다.
 
-## Results at a glance
+## 결과 요약
 
-| Item | Result |
+| 항목 | 결과 |
 |---|---|
-| WAF detection rate | 0% in the original (no rule set installed) → 44.7%. 80.1% on the inputs the app actually reads (query string, JSON body) |
-| False positives on real traffic | 0 in every run |
-| Two firewall approaches | Same rules blocked 17 and 16 plaintext attacks; they disagreed on 1 request |
-| Operations | Managed: ~$0.50/h, 6 min to deploy. Self-operated: ~$0.12/h, 2 min to deploy |
-| Acceptance criteria | 11 of 11 met ([`docs/05-verification.md`](docs/05-verification.md)) |
-| Requirements | 46 total: 40 met, 4 partial, 2 not implemented (optional and recommended items) |
+| WAF 탐지율 | 원본 0%(규칙 집합 없음) → 44.7%. 앱이 실제로 읽는 입력(질의 문자열, JSON 본문)만 보면 80.1% |
+| 실제 사용 흐름 오탐 | 모든 측정에서 0건 |
+| 두 방화벽 방식 | 같은 규칙으로 평문 공격을 각각 17건, 16건 차단. 판정이 갈린 요청은 1건 |
+| 운영 | 관리형은 시간당 약 $0.50, 배포 6분. 직접 운영은 시간당 약 $0.12, 배포 2분 |
+| 인수 기준 | 11건 모두 충족([`docs/05-verification.md`](docs/05-verification.md)) |
+| 요구사항 | 46건 중 충족 40, 부분 충족 4, 미구현 2(선택과 권장 항목) |
 
-## Architecture
+## 구성
 
-![Architecture](docs/images/architecture.png)
+![구성도](docs/images/architecture.png)
 
-Inbound requests pass through the internet gateway, then the network inspection layer, then the WAF. The WAF terminates TLS, inspects the request, and forwards it to the app over a second TLS connection. Outbound traffic from the app goes through the NAT gateway and the same inspection layer.
+들어오는 요청은 인터넷 게이트웨이를 지나 네트워크 검사 계층을 거친 뒤 WAF에 닿는다. WAF가 TLS를 풀어 요청을 검사하고, 다시 TLS로 감싸 앱에 넘긴다. 앱에서 나가는 트래픽도 NAT 게이트웨이를 지나 같은 검사 계층을 거친다.
 
-Both approaches run the Suricata engine with the same rule file, so any difference between them comes from the operating model rather than detection logic. A variable selects the approach. The network layout stays the same and only the route targets change. Audit logging lives in a separate, always-on environment, so it also records the calls that create and destroy the lab.
+두 방식 모두 Suricata 엔진에 같은 규칙 파일을 쓰기 때문에, 결과가 다르다면 탐지 로직이 아니라 운영 방식 때문이다. 방식은 변수 하나로 고르고, 네트워크 구성은 그대로 둔 채 라우팅 대상만 바뀐다. 감사 로그는 항상 켜져 있는 별도 환경에 두어서 랩을 만들고 지우는 호출까지 남는다.
 
-## Key findings
+## 주요 발견
 
 ### WAF
 
-The WAF in the original lab had no rule set installed. It had zero detection rules and was only logging requests. I sent the same 618 requests under each configuration: 0% with no rules, 35.0% with CRS at paranoia level 1, and 44.7% at level 2. I enabled blocking at level 2. False positives on real app traffic stayed at 0 throughout.
+원본 랩의 WAF는 로그 수집을 목적으로 둔 것이라 규칙 집합이 설치되어 있지 않았고, 탐지 규칙은 0개였다. 같은 요청 618개를 설정만 바꿔 보내 보니 규칙이 없을 때 0%, CRS 편집증 수준 1에서 35.0%, 수준 2에서 44.7%가 나왔다. 차단은 수준 2로 켰고, 그동안 실제 앱 트래픽에서 오탐은 한 건도 없었다.
 
-To count detections even in detect-only mode, I wrote a measurement tool that tags every request with an ID and looks the ID up in each layer's logs ([`ADR-020`](docs/adr/020-in-house-probe-tool.md), [`ADR-021`](docs/adr/021-record-versions-and-paranoia-level.md)).
+탐지만 하는 모드에서도 탐지 건수를 셀 수 있도록, 요청마다 ID를 붙이고 계층별 로그에서 그 ID를 찾아보는 측정 도구를 직접 만들었다([`ADR-020`](docs/adr/020-in-house-probe-tool.md), [`ADR-021`](docs/adr/021-record-versions-and-paranoia-level.md)).
 
-### What each layer can see
+### 계층마다 보이는 것
 
-The network inspection layer sits in front of TLS termination. When the same attacks were sent over HTTPS, it caught none of them; every HTTPS attack that was stopped was stopped by the WAF. The one thing only the network layer could do was control outbound traffic from the app server ([`ADR-025`](docs/adr/025-no-firewall-tls-inspection.md)).
+네트워크 검사 계층은 TLS가 풀리기 전에 있다. 같은 공격을 HTTPS로 보냈을 때 이 계층은 하나도 잡지 못했고, HTTPS 공격은 모두 WAF에서 막혔다. 네트워크 계층만 할 수 있었던 일은 앱 서버에서 나가는 트래픽을 통제하는 것이었다([`ADR-025`](docs/adr/025-no-firewall-tls-inspection.md)).
 
-### Managed vs. self-operated
+### 관리형과 직접 운영
 
-Detection was nearly identical. The differences were operational. The managed firewall costs more and takes longer to come up, but AWS handles packet forwarding and failure behavior. The self-operated one is cheaper and faster, but I had to build everything myself, from fail-closed behavior to checking that the engine actually loaded all its rules. In return, its configuration and counters are visible, which made it possible to find the cause when something behaved oddly.
+탐지 결과는 거의 같았고, 차이는 운영에서 났다. 관리형은 비싸고 올라오는 데 오래 걸리지만 패킷 전달과 장애 시 동작을 AWS가 맡는다. 직접 운영은 싸고 빠르지만, 검사가 멈추면 트래픽을 막는 동작부터 엔진이 규칙을 전부 읽었는지 확인하는 일까지 모두 직접 만들어야 했다. 대신 설정과 카운터를 볼 수 있어서, 이상하게 동작할 때 원인을 찾을 수 있었다.
 
-For a lab that is created and destroyed often, self-operated is the better fit. For a service that stays up, managed is ([`docs/06-comparison.md`](docs/06-comparison.md)).
+자주 만들고 지우는 랩에는 직접 운영이, 계속 떠 있어야 하는 서비스에는 관리형이 맞다([`docs/06-comparison.md`](docs/06-comparison.md)).
 
-### Logging
+### 로그
 
-![CloudWatch dashboard](docs/images/dashboard.png)
+![CloudWatch 대시보드](docs/images/dashboard.png)
 
-The dashboard right after a measurement run with Suricata. It shows block counts from the WAF, the IPS, and VPC flow logs, plus IPS alerts grouped by rule and attack type. Alerts from both approaches use the same field names, so one query reads either ([`ADR-030`](docs/adr/030-collection-point-not-siem.md)). The log agent is installed only after its package signature is verified, and request bodies that carry passwords are dropped before they are logged ([`ADR-028`](docs/adr/028-cloudwatch-agent-signature.md), [`ADR-029`](docs/adr/029-mask-before-logging.md)).
+Suricata 방식으로 측정을 돌린 직후의 대시보드다. WAF, IPS, VPC 흐름 로그의 차단 건수와 IPS 경보를 규칙별, 공격 유형별로 보여 준다. 두 방식의 경보는 필드 이름이 같아서 쿼리 하나로 양쪽을 다 읽을 수 있다([`ADR-030`](docs/adr/030-collection-point-not-siem.md)). 로그 에이전트는 패키지 서명을 확인한 뒤에만 설치하고, 비밀번호가 담긴 요청 본문은 로그에 남기기 전에 버린다([`ADR-028`](docs/adr/028-cloudwatch-agent-signature.md), [`ADR-029`](docs/adr/029-mask-before-logging.md)).
 
-## Verification
+## 검증
 
-| Check | When | What it does |
+| 검사 | 시점 | 내용 |
 |---|---|---|
-| Secret scan (gitleaks) | Required before merge | Scans the full commit history, with an extra rule for ARNs that contain an account ID |
-| Format, validate, module tests | Required before merge | 16 module tests pin decisions such as route switching, exposure, IMDSv2, and encryption |
-| IaC security scan (Trivy) | Required before merge | Blocks the merge on HIGH or CRITICAL. The first run found unencrypted root volumes on all three instances |
-| Self-audit (Prowler) | After deploy | Fixed 11 account-level findings out of 121 failures and documented the rest ([`docs/04-audit-prowler.md`](docs/04-audit-prowler.md)) |
-| Deployment check (`tools/verify`) | After deploy | Runs 12 checks that used to be manual. All 12 pass in about 100 seconds |
+| 비밀값 검사(gitleaks) | 병합 전 필수 | 커밋 이력 전체를 검사. 계정 ID가 들어간 ARN을 잡는 규칙을 따로 추가 |
+| 형식, 문법, 모듈 테스트 | 병합 전 필수 | 모듈 테스트 16개로 라우팅 전환, 외부 노출, IMDSv2, 암호화 같은 결정을 고정 |
+| IaC 보안 검사(Trivy) | 병합 전 필수 | HIGH나 CRITICAL이 있으면 병합을 막는다. 처음 돌렸을 때 인스턴스 세 대 모두 루트 볼륨이 암호화되지 않은 것을 찾았다 |
+| 자체 감사(Prowler) | 배포 후 | 실패 121건 중 계정 단위 11건을 고치고 나머지는 이유를 적어 두었다([`docs/04-audit-prowler.md`](docs/04-audit-prowler.md)) |
+| 배포 점검(`tools/verify`) | 배포 후 | 손으로 하던 점검 12개를 한 번에 실행. 약 100초에 12개 모두 통과 |
 
-CI uses no AWS credentials. It only reads code, so the CI of a public repository never has access to the account ([`ADR-033`](docs/adr/033-ci-security-gates.md)).
+CI에는 AWS 자격 증명을 넣지 않았다. 코드만 읽기 때문에, 공개 저장소의 CI가 계정에 접근할 길이 아예 없다([`ADR-033`](docs/adr/033-ci-security-gates.md)).
 
-## Documents
+## 문서
 
-Design documents and ADRs are written in Korean.
-
-| Document | Contents |
+| 문서 | 내용 |
 |---|---|
-| [`01-requirements.md`](docs/01-requirements.md) | 10 functional, 9 non-functional, 27 security requirements, 11 acceptance criteria, 16 original defects |
-| [`02-threat-model.md`](docs/02-threat-model.md) | 5 trust boundaries, 44 threats, data flow diagram, accepted risks |
-| [`03-architecture.md`](docs/03-architecture.md) | Addressing, routing, security groups, log pipeline, differences from production |
-| [`04-audit-prowler.md`](docs/04-audit-prowler.md) | Self-audit results, fixes, and reasons for accepted findings |
-| [`05-verification.md`](docs/05-verification.md) | Acceptance results, traceability matrix for 46 requirements, known gaps |
-| [`06-comparison.md`](docs/06-comparison.md) | Comparison of the two approaches and conclusion |
-| [`07-operations.md`](docs/07-operations.md) | Deployment order, switching approaches, tool setup, common problems, cost |
-| [`adr/`](docs/adr/) | 36 design decisions, each with context, decision, rationale, alternatives, and consequences |
+| [`01-requirements.md`](docs/01-requirements.md) | 기능 10, 비기능 9, 보안 27개 요구사항, 인수 기준 11건, 원본 결함 16건 |
+| [`02-threat-model.md`](docs/02-threat-model.md) | 신뢰 경계 5개, 위협 44건, 데이터 흐름도, 수용한 위험 |
+| [`03-architecture.md`](docs/03-architecture.md) | 주소 체계, 라우팅, 보안 그룹, 로그 수집 경로, 운영 환경과 다른 점 |
+| [`04-audit-prowler.md`](docs/04-audit-prowler.md) | 자체 감사 결과, 고친 것, 그대로 둔 항목과 그 이유 |
+| [`05-verification.md`](docs/05-verification.md) | 인수 기준 판정, 요구사항 46건 추적표, 알려진 빈틈 |
+| [`06-comparison.md`](docs/06-comparison.md) | 두 방식 비교와 결론 |
+| [`07-operations.md`](docs/07-operations.md) | 배포 순서, 방식 전환, 도구 준비, 자주 막히는 곳, 비용 |
+| [`adr/`](docs/adr/) | 설계 결정 36건. 건마다 배경, 결정, 이유, 대안, 결과 |
 
-Design (requirements, threat model, architecture) was finished before implementation started. While building the threat model I found that outbound inspection (`FR-10`) was missing from the requirements and added it.
+설계(요구사항, 위협 모델, 구성)는 구현을 시작하기 전에 끝냈다. 위협 모델을 만들다가 요구사항에 아웃바운드 검사(`FR-10`)가 빠져 있다는 것을 알고 추가했다.
 
-## Repository layout
+## 저장소 구조
 
 ```
-bootstrap/          State bucket. Run once with local state
+bootstrap/          상태 버킷. 로컬 상태로 한 번만 실행
 envs/
-  audit/            Always-on audit environment: CloudTrail, locked bucket, budget, account baseline
-  lab/              Lab entry point. Created and destroyed as needed
+  audit/            항상 켜 두는 감사 환경: CloudTrail, 잠금 버킷, 예산, 계정 기본 설정
+  lab/              랩 진입점. 필요할 때 만들고 지운다
 modules/
-  network/          VPC, subnets, routing, gateways, security groups
-  web/              App instance and internal TLS termination
-  waf/              WAF instance and rule set
-  secrets/          Secret that carries the internal CA certificate
-  firewall_managed/ Approach A: AWS Network Firewall
-  firewall_oss/     Approach B: Suricata inline IPS
-  observability/    Flow logs, metrics, alarms, dashboard
-rules/              Suricata rules shared by both approaches
-scripts/            Install scripts shared by the instances
+  network/          VPC, 서브넷, 라우팅, 게이트웨이, 보안 그룹
+  web/              앱 인스턴스와 내부 TLS 종료
+  waf/              WAF 인스턴스와 규칙 집합
+  secrets/          내부 CA 인증서를 담는 비밀값
+  firewall_managed/ 방식 A: AWS Network Firewall
+  firewall_oss/     방식 B: Suricata 인라인 IPS
+  observability/    흐름 로그, 메트릭, 경보, 대시보드
+rules/              두 방식이 함께 쓰는 Suricata 규칙
+scripts/            인스턴스들이 함께 쓰는 설치 스크립트
 tools/
-  probe/            Per-layer detection measurement
-  verify/           Deployment verification
-docs/               Design documents and ADRs
+  probe/            계층별 탐지 측정
+  verify/           배포 점검
+docs/               설계 문서와 ADR
 ```
 
-## Quick start
+## 빠른 시작
 
-Requires Terraform 1.10+ and AWS CLI v2. First-time setup of the state bucket (`bootstrap/`) and the audit environment (`envs/audit/`), switching to approach B, and tool setup are in [`docs/07-operations.md`](docs/07-operations.md).
+Terraform 1.10 이상과 AWS CLI v2가 필요하다. 상태 버킷(`bootstrap/`)과 감사 환경(`envs/audit/`)을 처음 만드는 방법, 방식 B로 바꾸는 방법, 도구 준비는 [`docs/07-operations.md`](docs/07-operations.md)에 있다.
 
 ```bash
 cd envs/lab
-cp backend.hcl.example backend.hcl                # fill in the state bucket name
+cp backend.hcl.example backend.hcl                # 상태 버킷 이름을 채운다
 terraform init -backend-config=backend.hcl
-terraform apply                                   # approach A; inspection layer only, routes unchanged
-terraform apply -var=route_through_firewall=true  # switch routes after confirming management access
+terraform apply                                   # 방식 A. 검사 계층만 만들고 라우팅은 그대로
+terraform apply -var=route_through_firewall=true  # 관리 접속을 확인한 뒤 라우팅 전환
 terraform destroy -var=route_through_firewall=true
 ```
 
-Only the public IP of the machine that deployed the lab can reach the WAF. Keep the lab up only while you use it; approach A costs about $0.50 an hour.
+WAF에는 랩을 배포한 컴퓨터의 공인 IP만 접근할 수 있다. 랩은 쓸 때만 띄워 둔다. 방식 A는 시간당 약 $0.50이 든다.
