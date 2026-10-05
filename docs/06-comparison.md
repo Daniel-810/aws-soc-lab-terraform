@@ -1,91 +1,91 @@
-# Comparing the Two Approaches
+# 두 방식 비교
 
-| Item | Details |
+| 항목 | 내용 |
 |---|---|
-| Date | 2026-09-26 |
-| Compared | Approach A: AWS Network Firewall (managed) / Approach B: Suricata inline IPS on EC2 (self-operated) |
-| Evidence | Phase 8–11 deployments, measurement tool results, `ADR-022`–`ADR-027`, `05-verification.md` |
+| 일자 | 2026-09-26 |
+| 비교 대상 | 방식 A: AWS Network Firewall(관리형) / 방식 B: EC2 위의 Suricata 인라인 IPS(직접 운영) |
+| 근거 | Phase 8~11 배포, 측정 도구 결과, `ADR-022`~`ADR-027`, `05-verification.md` |
 
-## Conclusion
+## 결론
 
-With the same rules, both approaches blocked almost exactly the same attacks. The difference was in operations, not detection. The managed firewall costs about four times as much per hour, but AWS takes care of forwarding, failure handling, and the engine. The self-operated one is cheaper and faster to bring up, but I had to build and own all of that myself.
+같은 규칙을 쓰면 두 방식이 막는 공격은 거의 똑같았다. 차이는 탐지가 아니라 운영에서 났다. 관리형은 시간당 비용이 네 배쯤 되지만 패킷 전달, 장애 처리, 엔진 관리를 AWS가 맡는다. 직접 운영은 싸고 빨리 올라오지만 그 일을 모두 내가 만들고 책임져야 했다.
 
-For an environment like this one, which is created for a test and destroyed afterwards, self-operated is the better fit. It comes up in about a minute, so repeated measurements are easy, and when something goes wrong the configuration and counters show why. For a service that stays up, I would recommend managed. Bringing the self-operated setup to production level means running several instances behind a Gateway Load Balancer with auto scaling, and at that point the gap in both cost and complexity narrows considerably (`03-architecture.md` section 5.1).
+이 환경처럼 시험할 때 만들고 끝나면 지우는 곳에는 직접 운영이 더 맞다. 1분 안팎이면 올라와서 측정을 여러 번 반복하기 쉽고, 문제가 생기면 설정과 카운터를 보고 원인을 알 수 있다. 계속 떠 있어야 하는 서비스라면 관리형을 권한다. 직접 운영 방식을 운영 수준으로 끌어올리려면 Gateway Load Balancer 뒤에 인스턴스 여러 대를 두고 오토 스케일링까지 붙여야 하는데, 그러면 비용과 복잡도 모두 차이가 크게 줄어든다(`03-architecture.md` 5.1절).
 
-Whichever approach is used, attacks inside encrypted web requests were invisible at the network layer. HTTPS attacks were stopped by the WAF, which terminates TLS. What the network layer reliably did was filter some plaintext requests first and control outbound traffic from inside the VPC. These conclusions come from one Availability Zone, 15 custom rules, and 515 measurement requests; section 7 covers the limits.
+어느 방식이든 암호화된 웹 요청 안의 공격은 네트워크 계층에서 보이지 않았다. HTTPS 공격은 TLS를 푸는 WAF에서 막혔다. 네트워크 계층이 확실하게 해낸 일은 평문 요청 일부를 먼저 거르는 것과 VPC 안에서 나가는 트래픽을 통제하는 것이었다. 이 결론은 가용 영역 하나, 직접 작성한 규칙 15개, 측정 요청 515개에서 나왔다. 한계는 7절에 적었다.
 
 ---
 
-## 1. What was held constant
+## 1. 똑같이 맞춘 조건
 
-Both approaches load the same rule file (`rules/attacks.rules`, 15 rules), and both use the Suricata engine. I did not use the managed firewall's AWS-managed rule groups: if only one side had them, a difference in results could come from either the operating model or the rules, and there would be no way to tell which (`ADR-022`). The network layout and paths are also identical. Only the route target changes, from the firewall endpoint to the Suricata instance's network interface (`ADR-026`).
+두 방식은 같은 규칙 파일(`rules/attacks.rules`, 규칙 15개)을 읽고, 엔진도 똑같이 Suricata다. 관리형 방화벽의 AWS 관리형 규칙 그룹은 쓰지 않았다. 한쪽에만 그 규칙이 있으면 결과가 달라졌을 때 운영 방식 때문인지 규칙 때문인지 가릴 수 없기 때문이다(`ADR-022`). 네트워크 구성과 경로도 같다. 라우팅 대상만 방화벽 엔드포인트에서 Suricata 인스턴스의 네트워크 인터페이스로 바뀐다(`ADR-026`).
 
-Each run sent the same 515 requests over both plaintext (80) and encrypted (443) paths with the same tool. Every request carried an ID that could be looked up in each layer's logs, so I could tell, request by request, which layer blocked what (`ADR-020`).
+측정할 때마다 같은 도구로 같은 요청 515개를 평문(80)과 암호화(443) 경로에 모두 보냈다. 요청마다 계층별 로그에서 찾아볼 수 있는 ID를 붙였기 때문에, 어느 계층이 무엇을 막았는지 요청 하나하나 단위로 확인할 수 있었다(`ADR-020`).
 
-## 2. Detection
+## 2. 탐지
 
-| | Approach A (managed) | Approach B (self-operated) |
+| | 방식 A(관리형) | 방식 B(직접 운영) |
 |---|---|---|
-| Requests blocked on the plaintext path | 17 | 16 |
-| Requests blocked on the encrypted path | 0 | 0 |
-| False positives on real traffic | 0 | 0 |
-| Outbound marker request | Blocked | Blocked |
+| 평문 경로에서 막은 요청 | 17 | 16 |
+| 암호화 경로에서 막은 요청 | 0 | 0 |
+| 실제 트래픽 오탐 | 0 | 0 |
+| 아웃바운드 표식 요청 | 차단 | 차단 |
 
-The two approaches disagreed on one request. The same cross-site scripting payload was caught by both when placed in the URL path, but only by the managed firewall when placed in the query string. The `=` the rule looks for was encoded as `%3D` in that request, so my working explanation is that the two engines decode the query string differently by default. I did not confirm this by changing settings. The managed firewall does not publish its Suricata version or configuration, so on that side any explanation stays a guess.
+두 방식의 판정이 갈린 요청은 하나였다. 같은 크로스 사이트 스크립팅 페이로드를 URL 경로에 넣으면 둘 다 잡았는데, 질의 문자열에 넣으면 관리형만 잡았다. 그 요청에서는 규칙이 찾는 `=`가 `%3D`로 인코딩되어 있었다. 그래서 두 엔진이 질의 문자열을 디코딩하는 기본 설정이 다르기 때문이라고 보고 있지만, 설정을 바꿔 가며 확인하지는 않았다. 관리형 방화벽은 Suricata 버전과 설정을 공개하지 않으므로, 그쪽 원인은 끝까지 추정으로 남는다.
 
-Most requests blocked at the network layer on the plaintext path were ones the WAF would have blocked anyway. The combined detection rate of both layers was only about 1 percentage point higher than the WAF alone on the encrypted path. The network-layer rules are few and simple; the WAF did nearly all of the work against web attacks.
+평문 경로에서 네트워크 계층이 막은 요청은 대부분 어차피 WAF가 막았을 요청이었다. 두 계층을 합친 탐지율은 암호화 경로의 WAF 단독 탐지율보다 1%p 정도 높을 뿐이었다. 네트워크 계층 규칙은 적고 단순해서, 웹 공격은 거의 전부 WAF가 막았다.
 
-The WAF's 44.7% detection rate varies sharply with where the attack is placed.
+WAF의 탐지율 44.7%는 공격을 어디에 넣었느냐에 따라 크게 달라진다.
 
-| Attack location (HTTPS, 309 attacks) | WAF detection rate |
+| 공격 위치(HTTPS, 공격 309개) | WAF 탐지율 |
 |---|---|
-| Query string | 82.1% |
-| JSON body | 78.2% |
-| URL path | 14.1% |
-| Custom header | 2.7% |
+| 질의 문자열 | 82.1% |
+| JSON 본문 | 78.2% |
+| URL 경로 | 14.1% |
+| 사용자 정의 헤더 | 2.7% |
 
-The URL path and the custom header are places this app does not read as input. The app is a single-page application that returns the same page for any path, and the header name is one no application uses. On the two locations the app actually reads, the WAF blocked 80.1%, including every SQL injection, NoSQL injection, remote command execution, and XXE payload. Widening the rules to inspect paths and headers for attack patterns would raise the headline number, but it would not stop any additional real attack and would only add false positives, so I did not. LDAP injection was not detected anywhere, because the rule set (CRS 3.3.5) has very few rules for it; this app has no LDAP.
+URL 경로와 사용자 정의 헤더는 이 앱이 입력으로 읽지 않는 곳이다. 앱은 어떤 경로로 들어와도 같은 페이지를 돌려주는 단일 페이지 애플리케이션이고, 헤더 이름은 어떤 애플리케이션도 쓰지 않는 이름이다. 앱이 실제로 읽는 두 위치에서는 WAF가 80.1%를 막았고, SQL 인젝션, NoSQL 인젝션, 원격 명령 실행, XXE 페이로드는 하나도 빠짐없이 막았다. 경로와 헤더까지 공격 패턴을 보도록 규칙을 넓히면 전체 수치는 올라가겠지만, 실제 공격을 더 막지는 못하고 오탐만 늘어나므로 그렇게 하지 않았다. LDAP 인젝션은 어디에서도 잡히지 않았는데, 규칙 집합(CRS 3.3.5)에 LDAP 규칙이 거의 없기 때문이다. 이 앱은 LDAP를 쓰지 않는다.
 
-## 3. What each approach required to run
+## 3. 방식마다 운영에 필요했던 것
 
-The managed firewall took six resources: a rule group, a policy, the firewall, two log groups, and a logging configuration. In exchange, some things had to be done the service's way. It does not accept line continuations in rule files, so rules had to be joined into single lines before being passed in. Rule group capacity cannot be changed after creation, so I sized it generously up front. While the account was on the free plan, the service could not be used at all.
+관리형 방화벽에 필요한 리소스는 규칙 그룹, 정책, 방화벽, 로그 그룹 두 개, 로깅 설정까지 여섯 개였다. 대신 서비스가 정한 방식을 따라야 하는 부분이 있었다. 규칙 파일의 줄 이어 쓰기를 받지 않아서, 규칙을 한 줄로 합쳐서 넘겨야 했다. 규칙 그룹 용량은 만든 뒤에 바꿀 수 없어서 처음부터 넉넉하게 잡았다. 계정이 무료 플랜이었을 때는 서비스를 아예 쓸 수 없었다.
 
-The self-operated approach meant building, one by one, the things AWS otherwise does. I disabled the source/destination check so the instance would accept packets not addressed to it, enabled kernel forwarding, turned off the ICMP redirects that a single-interface router sends, and queued only forwarded traffic for Suricata to judge. The package's default service runs in passive mode, which only sees copies of packets, so I wrote a separate inline service. Even then, if Suricata came up in passive mode or a single rule failed to parse, the service would look healthy while blocking nothing. The boot script therefore checks that the queue is actually bound and that every rule loaded, and stops if either check fails (`ADR-027`).
+직접 운영은 원래 AWS가 해 주는 일을 하나씩 직접 만들어야 했다. 자기에게 온 패킷이 아니어도 받도록 소스/대상 확인을 끄고, 커널 포워딩을 켜고, 인터페이스가 하나인 라우터가 보내는 ICMP 리다이렉트를 끄고, 전달되는 트래픽만 큐에 넣어 Suricata가 판정하게 했다. 패키지에 들어 있는 기본 서비스는 패킷 복사본만 보는 수동 모드로 돌기 때문에, 인라인 모드용 서비스를 따로 만들었다. 그래도 Suricata가 수동 모드로 올라오거나 규칙 하나가 파싱에 실패하면, 서비스는 멀쩡해 보이는데 아무것도 막지 않는다. 그래서 부팅 스크립트가 큐가 실제로 연결됐는지와 규칙을 전부 읽었는지를 확인하고, 하나라도 실패하면 멈추게 했다(`ADR-027`).
 
-Self-operation also forced some decisions that never came up with the managed firewall. The instance needs a public address for its own traffic, and a security group cannot tell forwarded traffic from traffic addressed to the instance, so ports 80 and 443 had to be narrowed to the operator's address. That in turn blocked the WAF's outbound 443, so another rule was needed. With the rule file embedded in the boot script, the user data came within 1 KB of the 16 KB limit; compressing it solved that.
+관리형에서는 생각할 필요가 없던 결정도 직접 운영에서는 해야 했다. 인스턴스 자신의 트래픽에는 공인 주소가 필요한데, 보안 그룹은 전달되는 트래픽과 인스턴스로 오는 트래픽을 구분하지 못한다. 그래서 80번과 443번 포트를 운영자 주소로 좁혀야 했고, 그 때문에 WAF가 밖으로 나가는 443이 막혀서 규칙을 하나 더 넣었다. 규칙 파일을 부팅 스크립트에 넣었더니 사용자 데이터가 한도 16KB에 1KB 차이까지 다가갔고, 압축해서 해결했다.
 
-## 4. When inspection stops
+## 4. 검사가 멈추면
 
-With the managed firewall, you cannot choose whether traffic passes or is dropped when inspection fails. AWS keeps the endpoint in each Availability Zone running, and that decision is neither visible nor configurable.
+관리형 방화벽은 검사가 실패했을 때 트래픽을 통과시킬지 버릴지 고를 수 없다. 가용 영역마다 엔드포인트가 계속 돌도록 AWS가 관리하고, 그 판단은 보이지도 않고 설정할 수도 없다.
 
-For the self-operated approach I chose fail-closed (`ADR-012`) and tested it by stopping Suricata. Responses from the WAF stopped on both plaintext and encrypted paths, while management access to the Suricata instance itself stayed up, so I could log in and restart it. What I had not expected was that management access to the app was lost too: the app's outbound connections also go through NAT and then Suricata. Even after the restart, commands to the app stalled for about six minutes. In IPS mode, Suricata 7 drops connections it did not see from the start, and the agent connections established before the restart fell into that category. The counter `ips.drop_reason.stream_midstream` recorded it. A command that stalled right after switching routes on the managed firewall looks like the same effect, but the managed firewall's internal counters are not visible, so that remains a guess.
+직접 운영에서는 검사가 멈추면 트래픽을 막는 쪽(fail-closed)을 골랐고(`ADR-012`), Suricata를 멈춰서 시험했다. 평문과 암호화 경로 모두 WAF의 응답이 끊겼고, Suricata 인스턴스 자체의 관리 접속은 살아 있어서 들어가서 다시 시작할 수 있었다. 예상하지 못한 것은 앱의 관리 접속까지 끊긴 일이었다. 앱이 밖으로 나가는 연결도 NAT를 지나 Suricata를 거치기 때문이다. 다시 시작한 뒤에도 앱에 보내는 명령이 6분쯤 멈춰 있었다. Suricata 7은 IPS 모드에서 처음부터 보지 못한 연결을 버리는데, 다시 시작하기 전에 맺어진 에이전트 연결이 여기에 해당했다. `ips.drop_reason.stream_midstream` 카운터에 그 기록이 남아 있었다. 관리형 방화벽에서도 라우팅을 바꾼 직후 명령이 멈춘 적이 있어 같은 현상으로 보이지만, 관리형은 내부 카운터를 볼 수 없어서 추정으로 남겨 둔다.
 
-On the self-operated side, the single instance is a single point of failure for everything. This environment has no availability requirement, so I left it (`NFR-05`), but in production redundancy would come first.
+직접 운영에서는 인스턴스 한 대가 모든 트래픽의 단일 장애점이다. 이 환경에는 가용성 요구사항이 없어서 그대로 두었지만(`NFR-05`), 운영 환경이라면 이중화부터 해야 한다.
 
-## 5. Cost and time
+## 5. 비용과 시간
 
-| | Approach A (managed) | Approach B (self-operated) |
+| | 방식 A(관리형) | 방식 B(직접 운영) |
 |---|---|---|
-| Inspection layer up | 5 min 45 s | ~1 min |
-| Full create | ~6 min | ~2 min |
-| Full destroy | ~5 min 30 s | ~80 s |
-| Hourly cost, everything running | ~$0.50 (endpoint $0.395) | ~$0.12 |
-| Hours per month on a ₩50,000 budget | ~70 | ~290 |
+| 검사 계층 생성 | 5분 45초 | 약 1분 |
+| 전체 생성 | 약 6분 | 약 2분 |
+| 전체 삭제 | 약 5분 30초 | 약 80초 |
+| 전부 켰을 때 시간당 비용 | 약 $0.50(엔드포인트 $0.395) | 약 $0.12 |
+| 월 예산 5만 원으로 쓸 수 있는 시간 | 약 70시간 | 약 290시간 |
 
-Costs are calculated from Seoul region on-demand prices at 1,400 KRW per USD. Billing data lags by about a day, so usage on the day of testing could not be queried.
+비용은 서울 리전 온디맨드 단가에 1달러 1,400원으로 계산했다. 청구 데이터는 하루쯤 늦게 반영되어서, 시험한 날의 사용량은 조회할 수 없었다.
 
-Turning on TLS inspection in the managed firewall would make the encrypted path visible too, but the advanced inspection endpoint adds $0.792 an hour, and inbound inspection requires handing the server's private key to Certificate Manager, so I did not use it (`ADR-025`).
+관리형 방화벽에서 TLS 검사를 켜면 암호화 경로도 볼 수 있지만, 고급 검사 엔드포인트가 시간당 $0.792 더 들고, 인바운드 검사를 하려면 서버 개인 키를 Certificate Manager에 넘겨야 해서 쓰지 않았다(`ADR-025`).
 
-## 6. Finding the cause of a problem
+## 6. 문제의 원인 찾기
 
-Managed firewall alerts land in CloudWatch directly, but they arrived anywhere from 20 seconds to over a minute late. Once, the measurement tool stopped before they arrived and counted zero alerts. Configuration and counters are not visible, so when a result looked wrong I had to infer the cause from the shape of the logs.
+관리형 방화벽의 경보는 CloudWatch로 바로 들어오지만, 20초에서 1분 넘게까지 늦게 도착했다. 한 번은 경보가 도착하기 전에 측정 도구가 끝나서 경보를 0건으로 센 적도 있다. 설정과 카운터가 보이지 않으니, 결과가 이상하면 로그의 모양을 보고 원인을 짐작할 수밖에 없었다.
 
-With self-operation, alerts are written to disk immediately, and the command line, configuration files, and statistics counters are all visible. On the other hand, getting those logs into CloudWatch meant installing the agent myself (`ADR-028`). Because both approaches use the same engine, their alerts share field names; one side just wraps them in an extra layer. That made it possible to read both with a single query (`ADR-030`).
+직접 운영에서는 경보가 바로 디스크에 쓰이고, 실행 명령줄, 설정 파일, 통계 카운터를 모두 볼 수 있다. 대신 그 로그를 CloudWatch로 보내려면 에이전트를 직접 설치해야 했다(`ADR-028`). 두 방식이 같은 엔진을 쓰기 때문에 경보의 필드 이름도 같고, 한쪽이 한 겹 더 감싸고 있을 뿐이다. 덕분에 쿼리 하나로 양쪽 경보를 모두 읽을 수 있었다(`ADR-030`).
 
-## 7. Limits of this conclusion
+## 7. 이 결론의 한계
 
-- Measured in a single Availability Zone. Availability differences between the two were compared on paper only; failover was not measured.
-- The network layer uses 15 custom rules. Absolute detection rates say nothing about product performance and are only useful for comparing the two approaches.
-- 515 requests per run, and most comparisons rest on one or two runs per approach. Differences of one or two requests can shift between runs (approach B produced both 15 and 16).
-- The Suricata version and default configuration used by the managed firewall could not be checked.
-- Costs are based on unit prices, not on billed amounts.
+- 가용 영역 하나에서 측정했다. 두 방식의 가용성 차이는 문서로만 비교했고, 장애 조치는 측정하지 않았다.
+- 네트워크 계층은 직접 작성한 규칙 15개를 쓴다. 탐지율 절댓값은 제품 성능을 말해 주지 않고, 두 방식을 비교하는 데만 의미가 있다.
+- 한 번에 515개 요청을 보냈고, 대부분의 비교는 방식마다 한두 번의 측정에 기대고 있다. 한두 건 차이는 측정할 때마다 달라질 수 있다(방식 B는 15건이 나온 적도, 16건이 나온 적도 있다).
+- 관리형 방화벽이 쓰는 Suricata 버전과 기본 설정은 확인할 수 없었다.
+- 비용은 실제 청구 금액이 아니라 단가로 계산했다.
