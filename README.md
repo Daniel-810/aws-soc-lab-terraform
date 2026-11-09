@@ -16,6 +16,7 @@
 | 운영 | 관리형은 시간당 약 $0.50, 배포 6분. 직접 운영은 시간당 약 $0.12, 배포 2분 |
 | 인수 기준 | 11건 모두 충족([`docs/05-verification.md`](docs/05-verification.md)) |
 | 요구사항 | 46건 중 충족 40, 부분 충족 4, 미구현 2(선택과 권장 항목) |
+| 컴플라이언스 매핑 | Prowler 결과를 ISMS-P 2023과 ISO 27001:2022에 매핑. ISMS-P 요구사항 97개 중 자동 점검이 붙은 것은 23개([`docs/04-audit-prowler.md`](docs/04-audit-prowler.md) 7절) |
 
 ## 구성
 
@@ -56,7 +57,7 @@ Suricata 방식으로 측정을 돌린 직후의 대시보드다. WAF, IPS, VPC 
 | 비밀값 검사(gitleaks) | 병합 전 필수 | 커밋 이력 전체를 검사. 계정 ID가 들어간 ARN을 잡는 규칙을 따로 추가([`ADR-037`](docs/adr/037-secret-scan-gate.md)) |
 | 형식, 문법, 모듈 테스트 | 병합 전 필수 | 모듈 테스트 16개로 라우팅 전환, 외부 노출, IMDSv2, 암호화 같은 결정을 고정 |
 | IaC 보안 검사(Trivy) | 병합 전 필수 | HIGH나 CRITICAL이 있으면 병합을 막는다. 처음 돌렸을 때 인스턴스 세 대 모두 루트 볼륨이 암호화되지 않은 것을 찾았다 |
-| 자체 감사(Prowler) | 배포 후 | 실패 121건 중 계정 단위 11건을 고치고 나머지는 이유를 적어 두었다([`docs/04-audit-prowler.md`](docs/04-audit-prowler.md)) |
+| 자체 감사(Prowler) | 배포 후 | 실패 121건 중 계정 단위 11건을 고치고 나머지는 이유를 적어 두었다. 재점검(11-09)에서는 실패 점검 73개를 원인별로 나누고 ISMS-P, ISO 27001에 매핑했다([`docs/04-audit-prowler.md`](docs/04-audit-prowler.md)) |
 | 배포 점검(`tools/verify`) | 배포 후 | 손으로 하던 점검 12개를 한 번에 실행. 약 100초에 12개 모두 통과 |
 
 CI에는 AWS 자격 증명을 넣지 않았다. 코드만 읽기 때문에, 공개 저장소의 CI가 계정에 접근할 길이 아예 없다([`ADR-033`](docs/adr/033-ci-security-gates.md)).
@@ -68,7 +69,8 @@ CI에는 AWS 자격 증명을 넣지 않았다. 코드만 읽기 때문에, 공�
 | [`01-requirements.md`](docs/01-requirements.md) | 기능 10, 비기능 9, 보안 27개 요구사항, 인수 기준 11건, 원본 결함 16건 |
 | [`02-threat-model.md`](docs/02-threat-model.md) | 신뢰 경계 5개, 위협 44건, 데이터 흐름도, 수용한 위험 |
 | [`03-architecture.md`](docs/03-architecture.md) | 주소 체계, 라우팅, 보안 그룹, 로그 수집 경로, 운영 환경과 다른 점 |
-| [`04-audit-prowler.md`](docs/04-audit-prowler.md) | 자체 감사 결과, 고친 것, 그대로 둔 항목과 그 이유 |
+| [`04-audit-prowler.md`](docs/04-audit-prowler.md) | 자체 감사 결과, 고친 것, 그대로 둔 항목과 그 이유, 재점검과 실패 원인 분류 |
+| [`04-audit-prowler-mapping.md`](docs/04-audit-prowler-mapping.md) | 재점검 결과의 ISMS-P 2023, ISO 27001:2022 요구사항별, 점검별 매핑 표 |
 | [`05-verification.md`](docs/05-verification.md) | 인수 기준 판정, 요구사항 46건 추적표, 알려진 빈틈 |
 | [`06-comparison.md`](docs/06-comparison.md) | 두 방식 비교와 결론 |
 | [`07-operations.md`](docs/07-operations.md) | 배포 순서, 방식 전환, 도구 준비, 자주 막히는 곳, 비용 |
